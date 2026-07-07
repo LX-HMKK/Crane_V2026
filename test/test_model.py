@@ -1,8 +1,5 @@
-import sys
 from pathlib import Path
 from unittest import mock
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import pytest
 import yaml
@@ -127,3 +124,57 @@ def test_bpu_model_infer_validation(tmp_path, monkeypatch):
     assert not tensor.flags["C_CONTIGUOUS"]
     model.infer(tensor)
     mock_model.forward.assert_called_once()
+
+
+def test_bpu_model_bin_is_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    _, cfg_file = _write_cfg(tmp_path)
+    bin_dir = tmp_path / "num.bin"
+    bin_dir.mkdir()
+
+    with pytest.raises(FileNotFoundError, match="bin not found"):
+        BpuModel(str(bin_dir), str(cfg_file))
+
+
+def test_bpu_model_cfg_is_directory(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    cfg_dir = tmp_path / "num_rdkx5_config.yaml"
+    cfg_dir.mkdir()
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    with pytest.raises(FileNotFoundError, match="config not found"):
+        BpuModel(str(bin_file), str(cfg_dir))
+
+
+def test_bpu_model_empty_config(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    cfg_file = tmp_path / "num_rdkx5_config.yaml"
+    cfg_file.write_text("\n\n", encoding="utf-8")
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    monkeypatch.setattr(
+        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
+    )
+
+    with pytest.raises(ValueError, match="config file is empty"):
+        BpuModel(str(bin_file), str(cfg_file))
+
+
+def test_bpu_model_load_returns_empty_sequence(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    _, cfg_file = _write_cfg(tmp_path)
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    monkeypatch.setattr(
+        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[]))
+    )
+
+    with pytest.raises(TypeError, match="sequence"):
+        BpuModel(str(bin_file), str(cfg_file))

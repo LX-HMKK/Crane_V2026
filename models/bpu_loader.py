@@ -3,7 +3,7 @@ from pathlib import Path
 try:
     import hobot_dnn as dnn
     HAS_HOBOT = True
-except (ImportError, ModuleNotFoundError):
+except ImportError:
     dnn = None
     HAS_HOBOT = False
 
@@ -17,28 +17,31 @@ class BpuModel:
                 "hobot_dnn is not available; BpuModel only runs on RDKx5"
             )
         bin_path = Path(bin_path)
-        if not bin_path.exists():
+        if not bin_path.is_file():
             raise FileNotFoundError(f"bin not found: {bin_path}")
         self.bin_path = str(bin_path)
         self.cfg = self._load_cfg(cfg_path)
-        self.model = dnn.load(self.bin_path)
+        loaded = dnn.load(self.bin_path)
         # hobot_dnn.load returns a sequence of models; take the first one.
-        if not hasattr(self.model, "__getitem__"):
+        try:
+            self._bpu_model = loaded[0]
+        except (TypeError, IndexError, KeyError) as exc:
             raise TypeError(
-                f"hobot_dnn.load returned {type(self.model).__name__}, expected a sequence"
-            )
-        self.m = self.model[0]
+                f"hobot_dnn.load returned {type(loaded).__name__}, expected a sequence"
+            ) from exc
 
     @staticmethod
     def _load_cfg(cfg_path):
         if cfg_path is None:
             return None
         cfg_path = Path(cfg_path)
-        if not cfg_path.exists():
+        if not cfg_path.is_file():
             raise FileNotFoundError(f"config not found: {cfg_path}")
         import yaml
         with open(cfg_path, "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
+        if cfg is None:
+            raise ValueError(f"config file is empty: {cfg_path}")
         for key in ("imgsz", "nc", "names", "reg_max", "strides"):
             if key not in cfg:
                 raise ValueError(f"config missing required key: {key}")
@@ -57,4 +60,4 @@ class BpuModel:
             )
         if not tensor.flags["C_CONTIGUOUS"]:
             tensor = np.ascontiguousarray(tensor)
-        return self.m.forward(tensor)
+        return self._bpu_model.forward(tensor)
