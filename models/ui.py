@@ -1,6 +1,7 @@
+import logging
+
 import cv2
 import yaml
-import numpy as np
 
 LINE_COLORS = {
     "bean_left_x": (0, 255, 0),
@@ -38,10 +39,9 @@ class CalibrationUI:
     def _camera_resolution(cam, default_w=640, default_h=480):
         w = getattr(cam, "width", None)
         h = getattr(cam, "height", None)
-        return (
-            int(w) if w is not None else default_w,
-            int(h) if h is not None else default_h,
-        )
+        w = int(w) if w is not None and int(w) > 0 else default_w
+        h = int(h) if h is not None and int(h) > 0 else default_h
+        return w, h
 
     def _resolve_trackbar_limits(self):
         bean_w, bean_h = self._camera_resolution(self.cam_bean)
@@ -127,6 +127,7 @@ class CalibrationUI:
             dets = model.predict(frame)
             self._draw_detections(frame, dets, model.names)
         except Exception as e:
+            logging.error("Model overlay inference failed: %s", e)
             cv2.putText(
                 frame, f"infer error: {e}", (10, error_y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2,
@@ -143,21 +144,24 @@ class CalibrationUI:
             while True:
                 if self.mode == "bean":
                     ok, frame = self.cam_bean.capture()
-                    if not ok:
-                        continue
-                    self._draw_bean_lines(frame)
-                    self._draw_model_overlay(frame, self.bean_model, error_y=30)
                     label = "BEAN (1/2 switch, ESC exit)"
+                    if ok:
+                        self._draw_bean_lines(frame)
+                        self._draw_model_overlay(frame, self.bean_model, error_y=30)
+                    else:
+                        frame = None
                 else:
                     ok, frame = self.cam_digit.capture()
-                    if not ok:
-                        continue
-                    self._draw_digit_lines(frame)
-                    self._draw_model_overlay(frame, self.digit_model, error_y=50)
                     label = "DIGIT (1/2 switch, ESC exit)"
+                    if ok:
+                        self._draw_digit_lines(frame)
+                        self._draw_model_overlay(frame, self.digit_model, error_y=50)
+                    else:
+                        frame = None
 
-                cv2.putText(frame, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.imshow("calibration", frame)
+                if frame is not None:
+                    cv2.putText(frame, label, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.imshow("calibration", frame)
 
                 key = cv2.waitKey(30) & 0xFF
                 if key == 27:  # ESC
@@ -169,4 +173,7 @@ class CalibrationUI:
         finally:
             self.cam_bean.release()
             self.cam_digit.release()
-            cv2.destroyAllWindows()
+            try:
+                cv2.destroyAllWindows()
+            except cv2.error:
+                pass

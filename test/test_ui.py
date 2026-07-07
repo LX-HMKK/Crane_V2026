@@ -117,7 +117,6 @@ def test_run_releases_cameras_on_exit(tmp_path, monkeypatch):
 
     monkeypatch.setattr(cv2, "imshow", lambda win, img: None)
     monkeypatch.setattr(cv2, "waitKey", lambda delay: 27)
-    monkeypatch.setattr(cv2, "destroyAllWindows", lambda: None)
 
     ui.run()
     cam_bean.release.assert_called_once()
