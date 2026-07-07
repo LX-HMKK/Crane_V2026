@@ -1,9 +1,11 @@
 from pathlib import Path
 from unittest import mock
 
+import numpy as np
 import pytest
 import yaml
 
+from models.bean_model import BeanModel
 from models.bpu_loader import BpuModel
 
 
@@ -178,3 +180,41 @@ def test_bpu_model_load_returns_empty_sequence(tmp_path, monkeypatch):
 
     with pytest.raises(TypeError, match="sequence"):
         BpuModel(str(bin_file), str(cfg_file))
+
+
+def create_dummy_cfg(path, names):
+    cfg = {
+        "imgsz": 640,
+        "nc": len(names),
+        "names": {i: n for i, n in enumerate(names)},
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+    }
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(cfg, f)
+    return cfg
+
+
+def test_bean_model_predict_calls_bpu_and_postprocess(tmp_path):
+    cfg_path = tmp_path / "bean.yaml"
+    create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+
+    fake_outputs = [
+        np.zeros((1, 80, 80, 64), dtype=np.float32),
+        np.zeros((1, 40, 40, 64), dtype=np.float32),
+        np.zeros((1, 20, 20, 64), dtype=np.float32),
+        np.zeros((1, 80, 80, 3), dtype=np.float32),
+        np.zeros((1, 40, 40, 3), dtype=np.float32),
+        np.zeros((1, 20, 20, 3), dtype=np.float32),
+    ]
+
+    with mock.patch("models.bean_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.infer.return_value = fake_outputs
+        MockBpu.return_value = bpu
+
+        model = BeanModel("assets/beans_v4.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45})
+        img = np.zeros((480, 640, 3), dtype=np.uint8)
+        dets = model.predict(img)
+        assert dets.shape[0] == 0
+        bpu.infer.assert_called_once()
