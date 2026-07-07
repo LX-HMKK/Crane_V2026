@@ -120,74 +120,81 @@ def run_competition(cfg):
     logging.info("Starting crane vision in competition mode")
 
     # Open cameras and models before acquiring the serial handle.
+    # Use an outer try/finally so cameras are released even if model load fails.
     cam_bean = _open_camera(cfg["cameras"]["bean"])
     cam_digit = _open_camera(cfg["cameras"]["digit"])
-    bean_model, digit_model = _load_models(cfg)
-
-    mapping = cfg.get("mapping", {}).get("bean_to_digit", DEFAULT_BEAN_TO_DIGIT)
-    task_gen = TaskGenerator(
-        mapping,
-        cfg["lines"],
-        bean_model.names,
-        digit_model.names,
-    )
-
-    port = SerialPort(
-        serial.Serial(
-            cfg["serial"]["port"],
-            cfg["serial"]["baudrate"],
-            timeout=cfg["serial"]["timeout"],
-        )
-    )
-
-    # Warm-up
-    logging.info("Warming up models...")
-    for _ in range(2):
-        ok, frame = cam_bean.capture()
-        if ok:
-            bean_model.predict(frame)
-        ok, frame = cam_digit.capture()
-        if ok:
-            digit_model.predict(frame)
-
-    logging.info("Ready. Waiting for START frame...")
-
     try:
-        while True:
-            if not port.wait_start():
-                continue
-            logging.info("START received, scanning...")
+        bean_model, digit_model = _load_models(cfg)
 
-            deadline = time.monotonic() + cfg["scan"].get("timeout_sec", 30)
-            result = None
-            reason = ""
-            max_attempts = cfg["scan"].get("max_retries", 0) + 1
-            for attempt in range(max_attempts):
-                if time.monotonic() >= deadline:
-                    reason = "scan timeout"
-                    break
-                result, reason = scan_once(
-                    cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
-                )
-                if result is not None:
-                    break
-                logging.warning(
-                    "Scan attempt %d failed: %s; retrying...", attempt + 1, reason
-                )
-                time.sleep(0.1)
+        mapping = cfg.get("mapping", {}).get(
+            "bean_to_digit", DEFAULT_BEAN_TO_DIGIT
+        )
+        task_gen = TaskGenerator(
+            mapping,
+            cfg["lines"],
+            bean_model.names,
+            digit_model.names,
+        )
 
-            if result is None:
-                logging.error("Failed to generate task: %s", reason)
-                continue
+        port = SerialPort(
+            serial.Serial(
+                cfg["serial"]["port"],
+                cfg["serial"]["baudrate"],
+                timeout=cfg["serial"]["timeout"],
+            )
+        )
 
-            p1, p2, p3 = result
-            logging.info("Sending TASK: %d %d %d", p1, p2, p3)
-            port.send_task(p1, p2, p3)
-            logging.info("Done. Returning to WAIT_START.")
-    except KeyboardInterrupt:
-        logging.info("Shutdown requested")
+        # Warm-up
+        logging.info("Warming up models...")
+        for _ in range(2):
+            ok, frame = cam_bean.capture()
+            if ok:
+                bean_model.predict(frame)
+            ok, frame = cam_digit.capture()
+            if ok:
+                digit_model.predict(frame)
+
+        logging.info("Ready. Waiting for START frame...")
+
+        try:
+            while True:
+                if not port.wait_start():
+                    continue
+                logging.info("START received, scanning...")
+
+                deadline = time.monotonic() + cfg["scan"].get("timeout_sec", 30)
+                result = None
+                reason = ""
+                max_attempts = cfg["scan"].get("max_retries", 0) + 1
+                for attempt in range(max_attempts):
+                    if time.monotonic() >= deadline:
+                        reason = "scan timeout"
+                        break
+                    result, reason = scan_once(
+                        cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
+                    )
+                    if result is not None:
+                        break
+                    logging.warning(
+                        "Scan attempt %d failed: %s; retrying...",
+                        attempt + 1,
+                        reason,
+                    )
+                    time.sleep(0.1)
+
+                if result is None:
+                    logging.error("Failed to generate task: %s", reason)
+                    continue
+
+                p1, p2, p3 = result
+                logging.info("Sending TASK: %d %d %d", p1, p2, p3)
+                port.send_task(p1, p2, p3)
+                logging.info("Done. Returning to WAIT_START.")
+        except KeyboardInterrupt:
+            logging.info("Shutdown requested")
+        finally:
+            port.close()
     finally:
-        port.close()
         cam_bean.release()
         cam_digit.release()
 
