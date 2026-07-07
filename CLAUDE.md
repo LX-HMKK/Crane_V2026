@@ -142,6 +142,10 @@ git commit -F .git-msg
 Remove-Item .git-msg
 ```
 
+### 协作者
+
+**禁止在提交信息中添加 `Co-Authored-By` 尾注或设置任何协作者。** 所有提交只记录实际执行该提交的作者。
+
 ## Important caveats
 
 - Do not run `scripts/deployment/infer_rdkx5_yolo11.py` on a development machine; it requires `hobot_dnn` from the RDKx5 image.
