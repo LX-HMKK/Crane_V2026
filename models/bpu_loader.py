@@ -1,7 +1,10 @@
+from pathlib import Path
+
 try:
     import hobot_dnn as dnn
     HAS_HOBOT = True
-except Exception:
+except (ImportError, ModuleNotFoundError):
+    dnn = None
     HAS_HOBOT = False
 
 
@@ -13,11 +16,45 @@ class BpuModel:
             raise EnvironmentError(
                 "hobot_dnn is not available; BpuModel only runs on RDKx5"
             )
-        self.bin_path = bin_path
-        self.cfg_path = cfg_path
-        self.model = dnn.load(bin_path)
+        bin_path = Path(bin_path)
+        if not bin_path.exists():
+            raise FileNotFoundError(f"bin not found: {bin_path}")
+        self.bin_path = str(bin_path)
+        self.cfg = self._load_cfg(cfg_path)
+        self.model = dnn.load(self.bin_path)
+        # hobot_dnn.load returns a sequence of models; take the first one.
+        if not hasattr(self.model, "__getitem__"):
+            raise TypeError(
+                f"hobot_dnn.load returned {type(self.model).__name__}, expected a sequence"
+            )
         self.m = self.model[0]
+
+    @staticmethod
+    def _load_cfg(cfg_path):
+        if cfg_path is None:
+            return None
+        cfg_path = Path(cfg_path)
+        if not cfg_path.exists():
+            raise FileNotFoundError(f"config not found: {cfg_path}")
+        import yaml
+        with open(cfg_path, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f)
+        for key in ("imgsz", "nc", "names", "reg_max", "strides"):
+            if key not in cfg:
+                raise ValueError(f"config missing required key: {key}")
+        return cfg
 
     def infer(self, tensor):
         """tensor: np.ndarray uint8, shape (1, 3, H, W) NCHW"""
+        import numpy as np
+        if not isinstance(tensor, np.ndarray):
+            raise TypeError(f"tensor must be np.ndarray, got {type(tensor).__name__}")
+        if tensor.dtype != np.uint8:
+            raise TypeError(f"tensor dtype must be uint8, got {tensor.dtype}")
+        if tensor.ndim != 4 or tensor.shape[0] != 1 or tensor.shape[1] != 3:
+            raise ValueError(
+                f"tensor shape must be (1, 3, H, W), got {tensor.shape}"
+            )
+        if not tensor.flags["C_CONTIGUOUS"]:
+            tensor = np.ascontiguousarray(tensor)
         return self.m.forward(tensor)
