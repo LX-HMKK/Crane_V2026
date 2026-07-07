@@ -19,10 +19,10 @@ class SerialPort:
         """Sliding-window match of AA 55 01 0D 0A."""
         deadline = None
         if timeout is not None:
-            deadline = time.time() + timeout
+            deadline = time.monotonic() + timeout
 
         while True:
-            if deadline and time.time() > deadline:
+            if deadline is not None and time.monotonic() > deadline:
                 return False
             byte = self.ser.read(1)
             if not byte:
@@ -31,19 +31,16 @@ class SerialPort:
             if len(self.buf) > 16:
                 self.buf.pop(0)
             if len(self.buf) >= 5 and self.buf[-5:] == START_FRAME:
+                # Clear buffer so a subsequent call starts fresh.
+                self.buf.clear()
                 return True
 
     def send_task(self, p1, p2, p3):
-        frame = struct.pack(
-            ">2B3B2B",
-            TASK_HEAD[0],
-            TASK_HEAD[1],
-            p1,
-            p2,
-            p3,
-            TASK_TAIL[0],
-            TASK_TAIL[1],
-        )
+        """Send a fixed 7-byte TASK frame: BB 66 p1 p2 p3 1B 1A."""
+        for p in (p1, p2, p3):
+            if not isinstance(p, int) or not (0 <= p <= 255):
+                raise ValueError(f"TASK payload values must be 0-255 ints, got {p!r}")
+        frame = TASK_HEAD + bytes([p1, p2, p3]) + TASK_TAIL
         self.ser.write(frame)
 
     def close(self):
