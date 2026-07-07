@@ -4,11 +4,11 @@
 
 ## 1. 概述
 
-- **模型**：YOLO11 6 头解耦输出（P3/P4/P5 各一组 bbox + cls），由 `export_rdkx5_onnx.py` 导出 ONNX，再经 `hb_mapper makertbin` 编译为 BPU `.bin`
+- **模型**：YOLO11 6 头解耦输出（P3/P4/P5 各一组 bbox + cls）。本文档假设你已经拥有 YOLO11 6-head ONNX 模型，并已完成 `hb_mapper makertbin` 编译为 BPU `.bin`。YOLOv5 导出桥 `tools/yolov5/export_rdkx5_onnx.py` 与本项目当前资产无关，请勿使用。
 - **输入**：`images`，`input_type_rt = nv12`、`input_type_train = rgb`、`input_layout_train = NCHW`，shape `1×3×640×640`
 - **归一化**：`norm_type = data_scale`、`scale_value = 1/255`，已编译进模型，板端喂 uint8 `[0,255]` 即可，不再除 255
 - **输出**：6 × FLOAT（3 个 bbox 头 `1×H×W×64` + 3 个 cls 头 `1×H×W×nc`）
-- **后处理**：DFL 解码 + 还原 xyxy + sigmoid + NMS，由 `scripts/deployment/infer_rdkx5_yolo11.py` 完成
+- **后处理**：DFL 解码 + 还原 xyxy + sigmoid + NMS，由 `scripts/main.py` 在板端调用
 
 ## 2. 前置条件
 
@@ -29,16 +29,19 @@
 |------|------|------|
 | `<name>_bayese_640x640_nv12.bin` | `assets/<exp>/rdkx5/` | BPU 编译后的模型 |
 | `<name>_rdkx5_config.yaml` | `assets/<exp>/rdkx5/` | 类别名、nc、imgsz、reg_max、strides |
-| `infer_rdkx5_yolo11.py` | `scripts/deployment/` | 板端推理 + 后处理脚本 |
+| `scripts/main.py` | 本项目 | 板端竞赛入口 / 校准 UI |
+| `scripts/watchdog.sh` | 本项目 | 自启动 / 崩溃重启 |
 | 测试图片 | 自备 | cv2 能读的常见格式 |
 
 从开发机拷到板端示例：
 ```bash
 scp assets/beans_v4/rdkx5/beans_v4_rdkx5_bayese_640x640_nv12.bin \
     assets/beans_v4/rdkx5/beans_v4_rdkx5_config.yaml \
-    scripts/deployment/infer_rdkx5_yolo11.py \
-    rdkx5:/home/root/beans_v4/
+    scripts/main.py scripts/watchdog.sh \
+    rdkx5:/home/root/crane/
 ```
+
+> 板端单图预览/校准请使用 `python3 scripts/main.py --ui`，不再单独维护 `scripts/deployment/infer_rdkx5_yolo11.py`。
 
 ## 3. 配置文件说明
 
@@ -60,29 +63,25 @@ task: detect
 
 ## 4. 命令行调用
 
+单图测试与校准统一由 `scripts/main.py --ui` 完成：
+
 ```bash
-python3 infer_rdkx5_yolo11.py \
-  --model beans_v4_rdkx5_bayese_640x640_nv12.bin \
-  --cfg   beans_v4_rdkx5_config.yaml \
-  --img   test.jpg \
-  --conf  0.25 --iou 0.45
+python3 scripts/main.py --ui
 ```
 
-参数：
+在 UI 中按 `1` / `2` 切换豆子/数字相机，按 ESC 退出。辅助线位置会自动保存到 `configs/vision.yaml`。
 
-| 参数 | 必填 | 默认 | 说明 |
-|------|------|------|------|
-| `--model` | 是 | — | `.bin` 模型路径 |
-| `--img` | 是 | — | 测试图片路径 |
-| `--cfg` | 否 | `<model>_config.yaml` | 配置 YAML；不传则把 `--model` 的 `.bin` 换成 `_config.yaml` |
-| `--conf` | 否 | `0.25` | 置信度阈值 |
-| `--iou` | 否 | `0.45` | NMS IoU 阈值 |
+竞赛模式由看门狗调用，无需手动执行：
 
-> **`--cfg` 命名坑**：默认推导会把 `beans_v4_rdkx5_bayese_640x640_nv12.bin` 解析成 `beans_v4_rdkx5_bayese_640x640_nv12_config.yaml`，而实际配置文件叫 `beans_v4_rdkx5_config.yaml`，**对不上**。建议始终显式传 `--cfg`。
+```bash
+./scripts/watchdog.sh
+```
+
+> 旧的 `infer_rdkx5_yolo11.py` 单图推理脚本已不再单独维护。
 
 ## 5. 推理流程
 
-`infer_rdkx5_yolo11.py` 的处理链：
+`scripts/main.py` 内部的处理链：
 
 1. **加载模型**：`dnn.load(model)` → 取 `models[0]`
 2. **读图**：`cv2.imread`（BGR）
@@ -141,5 +140,5 @@ python3 infer_rdkx5_yolo11.py \
 ## 9. 相关文档
 
 - [RDKx5 导出工作流](RDKx5_Export_Workflow.md) —— `.pt` → ONNX → `.bin` 的完整流程与环境搭建
-- `scripts/deployment/infer_rdkx5_yolo11.py` —— 本文描述的板端推理脚本
+- `scripts/main.py` —— 本文描述的板端竞赛入口/校准 UI
 - CLAUDE.md 常见坑 9 —— `hobot_dnn` 板端依赖说明
