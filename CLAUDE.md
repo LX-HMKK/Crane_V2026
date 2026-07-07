@@ -2,43 +2,101 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project overview
+## 项目概述
 
-This is a computer-vision object-detection workspace centered on a vendored copy of [Ultralytics YOLOv5](https://github.com/ultralytics/yolov5). It contains datasets, trained weights, ONNX/BPU `.bin` exports, and deployment notes for an RDKx5 board. As of the latest checkout, `scripts/`, `configs/`, and `models/` are empty placeholders (only `.gitkeep`), so most training/inference/export work is done by calling scripts directly inside `tools/yolov5/`.
+本仓库是 2026 物流技术创意赛的计算机视觉目标检测工作空间。它包含位于 `tools/yolov5/` 的 Ultralytics YOLOv5 副本（用于训练与导出），以及位于 `models/`、`scripts/`、`configs/` 和 `test/` 的独立 RDK X5 视觉运行时。运行时使用两路 USB 相机、两个 YOLO11 BPU `.bin` 模型（`num.bin` 识别数字，`beans_v4.bin` 识别豆子）和串口通信，为下位机生成 TASK 帧。
 
-> **Note:** `docs/RDKx5_Bin_Inference.md` describes a YOLO11-style 6-head deployment workflow, but the vendored training code under `tools/yolov5/` is standard YOLOv5. Treat the deployment doc as the source of truth for board-side inference and the YOLOv5 tree as the source of truth for training/export.
+> **注意：** `docs/RDKx5_Bin_Inference.md` 描述 YOLO11 风格的 6 头部署流程，但 `tools/yolov5/` 下的训练代码是标准 YOLOv5。板端推理以部署文档为准，训练/导出以 YOLOv5 树为准。
 
-## Repository layout
+## 仓库目录结构
 
 ```text
-assets/            # Trained model artifacts (.pt, .onnx, .bin)
-                   #   num.*      – digit detector
-                   #   beans_v4.* – bean maturity detector
-configs/           # Empty placeholder; intended for future training/model configs
-data/              # Datasets (YOLO format: images/ + labels/ + dataset.yaml)
-                   #   dataset3/       – raw digit images
-                   #   output_gray/    – processed digit dataset + split_dataset/
-                   #   beans/          – bean images + beans_split/
-docs/              # Deployment documentation (RDKx5_Bin_Inference.md)
-models/            # Empty placeholder; intended for future model definitions
-scripts/           # Empty placeholder; intended for future project-specific scripts
-tools/yolov5/      # Vendored YOLOv5 repository (train.py, detect.py, val.py, export.py, ...)
-tools/onnx/        # Empty; ignored by .gitignore
+assets/            # 训练好的模型产物（.pt、.onnx、.bin）
+                   #   num.*      – 数字检测器
+                   #   beans_v4.* – 豆子成熟度检测器
+                   #   *_rdkx5_config.yaml – BPU 部署配置
+configs/           # 运行时配置
+                   #   vision.yaml – 串口、相机、模型、辅助线、映射
+                   #   .gitkeep
+data/              # 数据集（YOLO 格式：images/ + labels/ + dataset.yaml）
+                   #   dataset3/       – 原始数字图片
+                   #   output_gray/    – 处理后的数字数据集 + split_dataset/
+                   #   beans/          – 豆子图片 + beans_split/
+docs/              # 部署与运行时文档
+                   #   RDKx5_Bin_Inference.md – YOLO11 BPU 板端工作流
+                   #   vision_runtime.md      – 视觉运行时入口与状态机
+                   #   vision_mapping.md      – 分区映射与辅助线规则
+                   #   superpowers/           – 设计文档与实现计划
+models/            # 视觉运行时源码
+                   #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
+                   #   bean_model.py, digit_model.py, camera.py
+                   #   serial_port.py, task_generator.py, mapping.py, ui.py
+scripts/           # 视觉运行时入口
+                   #   main.py     – 竞赛模式 + 校准 UI
+                   #   watchdog.sh – main.py 自动重启脚本
+                   #   .gitkeep
+test/              # x86 单元测试（mock hobot_dnn）
+requirements.txt   # 运行时/测试依赖
+README.md          # 项目概览（侧重视觉模块）
+tools/yolov5/      # 内嵌 YOLOv5 仓库（train.py、detect.py、val.py、export.py 等）
+tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 ```
 
-`data/*` is ignored by `.gitignore` except for `data/.gitkeep`; `tools/onnx/*` is also ignored. Large assets and datasets are expected to live on disk but are not committed.
+`data/*` 和 `tools/onnx/*` 已加入 `.gitignore`，仅保留 `data/.gitkeep`。大型资产和数据集只保存在本地工作区，不提交到仓库。
 
-## Common commands
+## 常用命令
 
-All YOLOv5 commands run from the repository root and reference scripts inside `tools/yolov5/`.
+以下命令均在仓库根目录执行。YOLOv5 训练/验证/导出命令引用 `tools/yolov5/` 中的脚本。
 
-### Install dependencies
+### 视觉运行时命令
+
+这些命令用于操作 RDK X5 竞赛运行时。`--ui` 校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
+
+#### 安装运行时/测试依赖
+
+```bash
+pip install -r requirements.txt
+```
+
+#### 运行单元测试
+
+```bash
+python -m pytest test/ -v
+```
+
+#### 使用实时预览校准辅助线
+
+```bash
+python scripts/main.py --ui
+```
+
+按 `1` / `2` 切换豆子/数字相机视图，用鼠标拖动辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
+
+#### 列出可用相机
+
+```bash
+python scripts/main.py --list-cameras
+```
+
+#### 运行竞赛模式（仅限 RDK X5）
+
+```bash
+python3 scripts/main.py
+```
+
+#### 自动重启竞赛模式
+
+```bash
+./scripts/watchdog.sh
+```
+
+### 安装依赖（YOLOv5 训练）
 
 ```bash
 pip install -r tools/yolov5/requirements.txt
 ```
 
-### Train a detector
+### 训练检测器
 
 ```bash
 python tools/yolov5/train.py \
@@ -51,9 +109,9 @@ python tools/yolov5/train.py \
   --name exp
 ```
 
-Use `data/beans/beans_split/beans_split.yaml` for the bean dataset. Weights are downloaded automatically on first use.
+豆子数据集使用 `data/beans/beans_split/beans_split.yaml`。权重首次使用时会自动下载。
 
-### Validate a model
+### 验证模型
 
 ```bash
 python tools/yolov5/val.py \
@@ -62,7 +120,7 @@ python tools/yolov5/val.py \
   --img 640
 ```
 
-### Run inference
+### 运行推理
 
 ```bash
 python tools/yolov5/detect.py \
@@ -75,7 +133,7 @@ python tools/yolov5/detect.py \
   --name exp
 ```
 
-### Export to ONNX
+### 导出 ONNX
 
 ```bash
 python tools/yolov5/export.py \
@@ -84,45 +142,55 @@ python tools/yolov5/export.py \
   --imgsz 640
 ```
 
-### Run YOLOv5 tests
+### 运行 YOLOv5 测试
 
 ```bash
 python -m pytest tools/yolov5/tests/
 ```
 
-Run a single test file:
+运行单个测试文件：
 
 ```bash
 python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 ```
 
-### RDKx5 board-side inference
+### RDKx5 板端推理
 
-See `docs/RDKx5_Bin_Inference.md` for the full workflow. The board-side script referenced by that doc (`scripts/deployment/infer_rdkx5_yolo11.py`) does not currently exist in this checkout; deploy by copying the `.bin`, its `_config.yaml`, and the inference script together to the RDKx5 board. Key points from the doc:
+完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main.py --ui` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
-- Input: RGB NCHW `uint8` tensor of shape `1×3×640×640`; normalization (`/255`) is baked into the model.
-- Letterbox padding uses gray value `127`.
-- Outputs are 6 tensors: `s_bbox`, `m_bbox`, `l_bbox`, `s_cls`, `m_cls`, `l_cls`.
-- Post-processing is DFL decode → xyxy restore → sigmoid → NMS.
-- The script depends on `hobot_dnn`, which is only available on the RDKx5 board.
+- 输入：RGB NCHW `uint8` 张量，形状 `1×3×640×640`；归一化（`/255`）已编译进模型。
+- Letterbox 填充使用灰度值 `127`。
+- 输出为 6 个张量：`s_bbox`、`m_bbox`、`l_bbox`、`s_cls`、`m_cls`、`l_cls`。
+- 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
+- 脚本依赖 `hobot_dnn`，仅在 RDKx5 镜像中可用。
 
-## Dataset conventions
+## 数据集规范
 
-Each dataset directory should contain:
+每个数据集目录应包含：
 
-- `images/train/` and `images/val/`
-- `labels/train/` and `labels/val/` with YOLO-format `.txt` files (`class x_center y_center width height`, normalized)
-- A `dataset.yaml` (or `<name>.yaml`) with `path`, `train`, `val`, `names`, and `nc`
+- `images/train/` 和 `images/val/`
+- `labels/train/` 和 `labels/val/`，文件为 YOLO 格式 `.txt`（`class x_center y_center width height`，已归一化）
+- `dataset.yaml`（或 `<name>.yaml`），包含 `path`、`train`、`val`、`names`、`nc`
 
-Existing dataset YAMLs use `path: .` and `train: .`, so they are invoked from inside their own directory. Prefer absolute or repo-root-relative paths when creating new dataset configs to avoid path confusion.
+现有数据集 YAML 使用 `path: .` 和 `train: .`，因此需要在该 YAML 所在目录下调用。新建数据集配置时，建议使用绝对路径或仓库根目录相对路径，以避免路径歧义。
 
-## Asset naming
+## 资产命名规范
 
-- `.pt`  – PyTorch weights (YOLOv5 / Ultralytics format)
-- `.onnx` – ONNX export for x86 validation
-- `.bin`  – BPU binary for RDKx5 deployment
+- `.pt`  – PyTorch 权重（YOLOv5 / Ultralytics 格式）
+- `.onnx` – x86 验证用 ONNX 导出
+- `.bin`  – RDKx5 部署用 BPU 二进制
 
-Each basename should have a matching config YAML for board deployment (e.g. `beans_v4_rdkx5_config.yaml`) with `imgsz`, `nc`, `names`, `reg_max`, and `strides`.
+每个 `.bin` 基名都应配有一个部署配置 YAML（例如 `beans_v4_rdkx5_config.yaml`），包含 `imgsz`、`nc`、`names`、`reg_max`、`strides`。额外字段（如 `task`、`model`、`onnx`）不影响板端推理。
+
+## 视觉运行时映射规则
+
+`configs/vision.yaml` 驱动竞赛逻辑：
+
+- `mapping.bean_to_digit`：将豆子类别映射为目标数字（默认黄豆→1、绿豆→2、白芸豆→3）。
+- `lines.bean.left_x` / `lines.bean.right_x`：竖直辅助线，将豆子相机画面划分为取货区 ①–③。
+- `lines.digit.horizontal_y` / `lines.digit.left_x` / `lines.digit.right_x`：辅助线，将数字相机画面划分为放置区 ④–⑧。
+
+运行 `python scripts/main.py --ui` 可在实时预览上拖动辅助线；位置会自动写回 `configs/vision.yaml`。具体分区规则见 `docs/vision_mapping.md`。
 
 ## 提交代码
 
@@ -146,8 +214,9 @@ Remove-Item .git-msg
 
 **禁止在提交信息中添加 `Co-Authored-By` 尾注或设置任何协作者。** 所有提交只记录实际执行该提交的作者。
 
-## Important caveats
+## 重要注意事项
 
-- Do not run `scripts/deployment/infer_rdkx5_yolo11.py` on a development machine; it requires `hobot_dnn` from the RDKx5 image.
-- `README.md` is currently empty; treat `docs/RDKx5_Bin_Inference.md` as the only written documentation.
-- Before committing new scripts or configs, check whether they belong in the empty top-level `scripts/`/`configs/` directories or inside `tools/yolov5/`.
+- 请勿在开发机上以竞赛模式运行 `scripts/main.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`--ui` 校准视图和单元测试可在 x86 上安全运行。
+- `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
+- 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
+- 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
