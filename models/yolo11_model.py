@@ -13,12 +13,22 @@ class Yolo11Model:
         cfg = self.bpu.cfg
         self.imgsz = cfg["imgsz"]
         self.nc = cfg["nc"]
-        self.names = cfg["names"]
+        self.names = self._normalize_names(cfg["names"])
         self.reg_max = cfg["reg_max"]
         self.strides = cfg["strides"]
         self.conf_thres = inference_cfg["conf_thres"]
         self.iou_thres = inference_cfg["iou_thres"]
         self.pad = inference_cfg.get("pad", 127)
+
+    @staticmethod
+    def _normalize_names(names):
+        if isinstance(names, dict):
+            return names
+        if isinstance(names, (list, tuple)):
+            return {i: str(name) for i, name in enumerate(names)}
+        raise TypeError(
+            f"names must be a dict or list, got {type(names).__name__}"
+        )
 
     def predict(self, bgr_image):
         if not isinstance(bgr_image, np.ndarray):
