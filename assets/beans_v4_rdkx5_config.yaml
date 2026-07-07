@@ -1,0 +1,9 @@
+imgsz: 640
+nc: 3
+names:
+  0: white
+  1: green
+  2: yellow
+reg_max: 16
+strides: [8, 16, 32]
+task: detect

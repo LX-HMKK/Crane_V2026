@@ -7,7 +7,8 @@ cd "$REPO_DIR"
 
 while true; do
     echo "[watchdog] Starting scripts/main.py at $(date)"
-    python3 scripts/main.py || true
-    echo "[watchdog] main.py exited ($?), restarting in 2s..."
+    exit_code=0
+    python3 scripts/main.py || exit_code=$?
+    echo "[watchdog] main.py exited ($exit_code), restarting in 2s..."
     sleep 2
 done

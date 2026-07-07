@@ -138,6 +138,9 @@ class TaskGenerator:
                 value = int(name)
             except ValueError:
                 return None, f"non-numeric digit name '{name}' in zone {zone}"
+            # Only digits 1-3 participate in task generation; 4/5 are empty boxes.
+            if value not in (1, 2, 3):
+                continue
             if value in placement_for_digit:
                 return None, (
                     f"duplicate digit {value} in placement zones "

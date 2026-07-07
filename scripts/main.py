@@ -57,34 +57,40 @@ def _open_camera(camera_cfg):
     )
 
 
-def run_calibration(cfg):
+def _load_models(cfg):
+    """Load BPU models; returns (bean_model, digit_model)."""
+    bean_model = BeanModel(
+        cfg["models"]["bean"]["bin"],
+        cfg["models"]["bean"]["cfg"],
+        cfg["inference"],
+    )
+    digit_model = DigitModel(
+        cfg["models"]["digit"]["bin"],
+        cfg["models"]["digit"]["cfg"],
+        cfg["inference"],
+    )
+    return bean_model, digit_model
+
+
+def run_calibration(cfg, cfg_path):
     cam_bean = _open_camera(cfg["cameras"]["bean"])
     cam_digit = _open_camera(cfg["cameras"]["digit"])
 
-    bean_model = None
-    digit_model = None
     try:
-        bean_model = BeanModel(
-            cfg["models"]["bean"]["bin"],
-            cfg["models"]["bean"]["cfg"],
-            cfg["inference"],
-        )
-        digit_model = DigitModel(
-            cfg["models"]["digit"]["bin"],
-            cfg["models"]["digit"]["cfg"],
-            cfg["inference"],
-        )
-    except EnvironmentError:
-        logging.warning("BPU not available; running UI in camera-only mode")
+        bean_model = None
+        digit_model = None
+        try:
+            bean_model, digit_model = _load_models(cfg)
+        except EnvironmentError:
+            logging.warning("BPU not available; running UI in camera-only mode")
 
-    ui = CalibrationUI(
-        str(ROOT / "configs" / "vision.yaml"),
-        cam_bean,
-        cam_digit,
-        bean_model,
-        digit_model,
-    )
-    try:
+        ui = CalibrationUI(
+            cfg_path,
+            cam_bean,
+            cam_digit,
+            bean_model,
+            digit_model,
+        )
         ui.run()
     finally:
         cam_bean.release()
@@ -113,33 +119,25 @@ def run_competition(cfg):
     init_logging()
     logging.info("Starting crane vision in competition mode")
 
+    # Open cameras and models before acquiring the serial handle.
+    cam_bean = _open_camera(cfg["cameras"]["bean"])
+    cam_digit = _open_camera(cfg["cameras"]["digit"])
+    bean_model, digit_model = _load_models(cfg)
+
+    mapping = cfg.get("mapping", {}).get("bean_to_digit", DEFAULT_BEAN_TO_DIGIT)
+    task_gen = TaskGenerator(
+        mapping,
+        cfg["lines"],
+        bean_model.names,
+        digit_model.names,
+    )
+
     port = SerialPort(
         serial.Serial(
             cfg["serial"]["port"],
             cfg["serial"]["baudrate"],
             timeout=cfg["serial"]["timeout"],
         )
-    )
-
-    cam_bean = _open_camera(cfg["cameras"]["bean"])
-    cam_digit = _open_camera(cfg["cameras"]["digit"])
-
-    bean_model = BeanModel(
-        cfg["models"]["bean"]["bin"],
-        cfg["models"]["bean"]["cfg"],
-        cfg["inference"],
-    )
-    digit_model = DigitModel(
-        cfg["models"]["digit"]["bin"],
-        cfg["models"]["digit"]["cfg"],
-        cfg["inference"],
-    )
-
-    task_gen = TaskGenerator(
-        DEFAULT_BEAN_TO_DIGIT,
-        cfg["lines"],
-        bean_model.names,
-        digit_model.names,
     )
 
     # Warm-up
@@ -159,10 +157,15 @@ def run_competition(cfg):
             if not port.wait_start():
                 continue
             logging.info("START received, scanning...")
+
+            deadline = time.monotonic() + cfg["scan"].get("timeout_sec", 30)
             result = None
             reason = ""
             max_attempts = cfg["scan"].get("max_retries", 0) + 1
             for attempt in range(max_attempts):
+                if time.monotonic() >= deadline:
+                    reason = "scan timeout"
+                    break
                 result, reason = scan_once(
                     cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
                 )
@@ -207,7 +210,7 @@ def main():
     cfg = load_vision_cfg(args.config)
 
     if args.ui:
-        run_calibration(cfg)
+        run_calibration(cfg, args.config)
     else:
         run_competition(cfg)
 
