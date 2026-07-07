@@ -1,0 +1,53 @@
+import cv2
+import numpy as np
+
+from models.bpu_loader import BpuModel
+from models.yolo11_postprocess import letterbox, postprocess, scale_coords
+
+
+class Yolo11Model:
+    """Shared inference pipeline for YOLO11-style BPU models."""
+
+    def __init__(self, bin_path, cfg_path, inference_cfg):
+        self.bpu = BpuModel(bin_path, cfg_path)
+        cfg = self.bpu.cfg
+        self.imgsz = cfg["imgsz"]
+        self.nc = cfg["nc"]
+        self.names = cfg["names"]
+        self.reg_max = cfg["reg_max"]
+        self.strides = cfg["strides"]
+        self.conf_thres = inference_cfg["conf_thres"]
+        self.iou_thres = inference_cfg["iou_thres"]
+        self.pad = inference_cfg.get("pad", 127)
+
+    def predict(self, bgr_image):
+        if not isinstance(bgr_image, np.ndarray):
+            raise TypeError(
+                f"input image must be np.ndarray, got {type(bgr_image).__name__}"
+            )
+        if bgr_image.ndim != 3:
+            raise ValueError(
+                f"input image must have 3 dimensions, got {bgr_image.ndim}"
+            )
+        if bgr_image.shape[2] != 3:
+            raise ValueError(
+                f"input image must have 3 channels (BGR), got {bgr_image.shape[2]}"
+            )
+
+        letterboxed, scale, pad = letterbox(
+            bgr_image, new_shape=(self.imgsz, self.imgsz), color=self.pad
+        )
+        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
+        tensor = np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.uint8)
+        outputs = self.bpu.infer(tensor)
+        post_cfg = {
+            "imgsz": self.imgsz,
+            "nc": self.nc,
+            "reg_max": self.reg_max,
+            "strides": self.strides,
+            "conf_thres": self.conf_thres,
+            "iou_thres": self.iou_thres,
+        }
+        dets = postprocess(outputs, post_cfg)
+        dets = scale_coords(dets, scale, pad)
+        return dets

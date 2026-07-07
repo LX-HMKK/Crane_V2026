@@ -7,6 +7,7 @@ import yaml
 
 from models.bean_model import BeanModel
 from models.bpu_loader import BpuModel
+from models.digit_model import DigitModel
 
 
 def test_bpu_model_raises_on_x86():
@@ -44,7 +45,6 @@ def test_bpu_model_happy_path_with_mock(tmp_path, monkeypatch):
     model = BpuModel(str(bin_file), str(cfg_file))
     assert model.cfg == cfg
 
-    import numpy as np
     tensor = np.zeros((1, 3, 640, 640), dtype=np.uint8)
     result = model.infer(tensor)
     assert result == ["output"]
@@ -106,8 +106,6 @@ def test_bpu_model_infer_validation(tmp_path, monkeypatch):
     )
 
     model = BpuModel(str(bin_file), str(cfg_file))
-
-    import numpy as np
 
     with pytest.raises(TypeError, match="np.ndarray"):
         model.infer("not an array")
@@ -195,26 +193,82 @@ def create_dummy_cfg(path, names):
     return cfg
 
 
-def test_bean_model_predict_calls_bpu_and_postprocess(tmp_path):
-    cfg_path = tmp_path / "bean.yaml"
-    create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+_FAKE_OUTPUTS = [
+    np.zeros((1, 80, 80, 64), dtype=np.float32),
+    np.zeros((1, 40, 40, 64), dtype=np.float32),
+    np.zeros((1, 20, 20, 64), dtype=np.float32),
+    np.zeros((1, 80, 80, 3), dtype=np.float32),
+    np.zeros((1, 40, 40, 3), dtype=np.float32),
+    np.zeros((1, 20, 20, 3), dtype=np.float32),
+]
 
-    fake_outputs = [
-        np.zeros((1, 80, 80, 64), dtype=np.float32),
-        np.zeros((1, 40, 40, 64), dtype=np.float32),
-        np.zeros((1, 20, 20, 64), dtype=np.float32),
-        np.zeros((1, 80, 80, 3), dtype=np.float32),
-        np.zeros((1, 40, 40, 3), dtype=np.float32),
-        np.zeros((1, 20, 20, 3), dtype=np.float32),
-    ]
 
-    with mock.patch("models.bean_model.BpuModel") as MockBpu:
+@pytest.mark.parametrize("model_class", [BeanModel, DigitModel])
+def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
+    cfg_path = tmp_path / f"{model_class.__name__.lower()}.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
-        bpu.infer.return_value = fake_outputs
+        bpu.cfg = cfg
+        bpu.infer.return_value = _FAKE_OUTPUTS
         MockBpu.return_value = bpu
 
-        model = BeanModel("assets/beans_v4.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45})
+        model = model_class(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = model.predict(img)
         assert dets.shape[0] == 0
         bpu.infer.assert_called_once()
+        tensor = bpu.infer.call_args[0][0]
+        assert tensor.shape == (1, 3, 640, 640)
+        assert tensor.dtype == np.uint8
+
+
+def test_model_predict_asserts_tensor_rgb_order(tmp_path):
+    cfg_path = tmp_path / "rgb.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.infer.return_value = _FAKE_OUTPUTS
+        MockBpu.return_value = bpu
+
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        img = np.zeros((640, 640, 3), dtype=np.uint8)
+        img[:, :, 0] = 1  # B
+        img[:, :, 1] = 2  # G
+        img[:, :, 2] = 3  # R
+        model.predict(img)
+        tensor = bpu.infer.call_args[0][0]
+        # Channel 0 is R, channel 1 is G, channel 2 is B after BGR→RGB conversion.
+        assert tensor[0, 0, :, :].mean() == 3.0
+        assert tensor[0, 1, :, :].mean() == 2.0
+        assert tensor[0, 2, :, :].mean() == 1.0
+
+
+@pytest.mark.parametrize("model_class", [BeanModel, DigitModel])
+def test_model_predict_rejects_bad_input(model_class, tmp_path):
+    cfg_path = tmp_path / f"{model_class.__name__.lower()}.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        MockBpu.return_value = bpu
+        model = model_class(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+
+        with pytest.raises(TypeError, match="np.ndarray"):
+            model.predict("not an array")
+
+        with pytest.raises(ValueError, match="3 dimensions"):
+            model.predict(np.zeros((480, 640), dtype=np.uint8))
+
+        with pytest.raises(ValueError, match="3 channels"):
+            model.predict(np.zeros((480, 640, 1), dtype=np.uint8))
