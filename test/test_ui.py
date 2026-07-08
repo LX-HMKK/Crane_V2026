@@ -1,4 +1,5 @@
 import sys
+import tkinter as tk
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -9,7 +10,9 @@ import pytest
 import yaml
 from unittest.mock import MagicMock
 
+from models.camera import MockCamera
 from models.ui import CalibrationUI
+from scripts.main import run_calibration
 
 
 def _write_cfg(tmp_path, values=None):
@@ -26,6 +29,53 @@ def _write_cfg(tmp_path, values=None):
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f)
     return cfg_path
+
+
+def _write_full_cfg(tmp_path):
+    cfg_path = tmp_path / "vision.yaml"
+    cfg = {
+        "lines": {
+            "bean": {"left_x": 100, "right_x": 300},
+            "digit": {"horizontal_y": 200, "left_x": 100, "right_x": 300},
+        },
+        "inference": {"imgsz": 640, "conf_thres": 0.25, "iou_thres": 0.45},
+        "cameras": {
+            "bean": {"device": 0, "width": 640, "height": 480, "buffer_size": 1},
+            "digit": {"device": 1, "width": 640, "height": 480, "buffer_size": 1},
+        },
+        "models": {
+            "bean": {
+                "bin": str(tmp_path / "bean.bin"),
+                "cfg": str(tmp_path / "bean.yaml"),
+            },
+            "digit": {
+                "bin": str(tmp_path / "digit.bin"),
+                "cfg": str(tmp_path / "digit.yaml"),
+            },
+        },
+    }
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f)
+    return cfg_path
+
+
+@pytest.fixture(autouse=True)
+def _mock_tkinter_and_pil(monkeypatch):
+    """Make Tkinter widget creation headless-test friendly."""
+
+    def _widget_mock(*args, **kwargs):
+        m = MagicMock()
+        m.winfo_children.return_value = []
+        return m
+
+    monkeypatch.setattr("models.ui.tk.Tk", MagicMock)
+    monkeypatch.setattr("models.ui.tk.Frame", _widget_mock)
+    monkeypatch.setattr("models.ui.tk.Label", _widget_mock)
+    monkeypatch.setattr("models.ui.tk.Button", _widget_mock)
+    monkeypatch.setattr("models.ui.tk.Scale", _widget_mock)
+    monkeypatch.setattr("models.ui.tk.IntVar", MagicMock)
+    monkeypatch.setattr("models.ui.ImageTk.PhotoImage", MagicMock)
+    monkeypatch.setattr("models.ui.Image.fromarray", MagicMock)
 
 
 def test_ui_saves_lines_on_change(tmp_path):
@@ -88,10 +138,10 @@ def test_draw_model_overlay_shows_error_on_failure(tmp_path):
 def test_init_window_headless_fallback(tmp_path, monkeypatch):
     cfg_path = _write_cfg(tmp_path)
 
-    def raise_cv2_error(*args, **kwargs):
-        raise cv2.error("no GUI support")
+    def raise_tcl_error(*args, **kwargs):
+        raise tk.TclError("no display name")
 
-    monkeypatch.setattr(cv2, "namedWindow", raise_cv2_error)
+    monkeypatch.setattr("models.ui.tk.Tk", raise_tcl_error)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert ui._window_ok is False
 
@@ -100,7 +150,7 @@ def test_run_raises_when_window_unavailable(tmp_path):
     cfg_path = _write_cfg(tmp_path)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     ui._window_ok = False
-    with pytest.raises(RuntimeError, match="OpenCV GUI"):
+    with pytest.raises(RuntimeError, match="GUI is not available"):
         ui.run()
 
 
@@ -112,12 +162,8 @@ def test_run_releases_cameras_on_exit(tmp_path, monkeypatch):
     cam_bean.capture.return_value = (True, frame)
     cam_digit.capture.return_value = (True, frame)
 
-    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
-    ui._window_ok = True
-
-    monkeypatch.setattr(cv2, "imshow", lambda win, img: None)
-    monkeypatch.setattr(cv2, "waitKey", lambda delay: 27)
-
+    root = MagicMock()
+    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit, root=root)
     ui.run()
     cam_bean.release.assert_called_once()
     cam_digit.release.assert_called_once()
@@ -135,3 +181,137 @@ def test_trackbar_limits_derived_from_camera_resolution(tmp_path):
     ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
     assert ui.max_x == 800
     assert ui.max_y == 600
+
+
+def test_initial_mode_creates_only_bean_sliders(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    created = []
+
+    def mock_scale(*args, **kwargs):
+        created.append(True)
+        return MagicMock()
+
+    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    assert ui.mode == "bean"
+    assert len(created) == 2
+
+
+def test_switching_mode_recreates_correct_trackbars(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    created = []
+
+    def mock_scale(*args, **kwargs):
+        created.append(True)
+        return MagicMock()
+
+    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    created.clear()
+
+    ui._set_mode("digit")
+    assert ui.mode == "digit"
+    assert len(created) == 3
+
+    created.clear()
+    ui._set_mode("bean")
+    assert ui.mode == "bean"
+    assert len(created) == 2
+
+
+def test_button_click_switches_mode(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    commands = {}
+
+    def mock_button(*args, **kwargs):
+        text = kwargs.get("text")
+        commands[text] = kwargs.get("command")
+        return MagicMock()
+
+    monkeypatch.setattr("models.ui.tk.Button", mock_button)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    assert ui.mode == "bean"
+
+    # Clicking the active view should keep the current mode.
+    commands["BEAN (1)"]()
+    assert ui.mode == "bean"
+
+    # Clicking the other view should switch.
+    commands["DIGIT (2)"]()
+    assert ui.mode == "digit"
+
+
+def test_key_binding_2_switches_to_digit_mode(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cam_bean.capture.return_value = (True, frame)
+    cam_digit.capture.return_value = (True, frame)
+
+    root = MagicMock()
+    binds = {}
+
+    def capture_bind(event, cb):
+        binds[event] = cb
+
+    root.bind.side_effect = capture_bind
+
+    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit, root=root)
+    assert "<KeyPress-2>" in binds
+    binds["<KeyPress-2>"](None)
+    assert ui.mode == "digit"
+
+    ui.run()
+    cam_bean.release.assert_called_once()
+    cam_digit.release.assert_called_once()
+
+
+def test_mock_camera_capture_shape_and_dtype():
+    cam = MockCamera(640, 480)
+    ok, frame = cam.capture()
+    assert ok is True
+    assert frame.shape == (480, 640, 3)
+    assert frame.dtype == np.uint8
+    cam.release()
+
+
+def test_calibration_ui_accepts_mock_cameras(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    cam_bean = MockCamera(640, 480, pattern="color_bars")
+    cam_digit = MockCamera(640, 480, pattern="checkerboard")
+    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
+    assert ui.cam_bean is cam_bean
+    assert ui.cam_digit is cam_digit
+    assert ui.max_x == 640
+    assert ui.max_y == 480
+
+
+def test_mock_camera_empty_pattern_returns_black_frame():
+    cam = MockCamera(640, 480, pattern="empty")
+    ok, frame = cam.capture()
+    assert ok is True
+    assert frame.shape == (480, 640, 3)
+    assert frame.dtype == np.uint8
+    assert np.all(frame == 0)
+    cam.release()
+
+
+def test_run_calibration_uses_empty_frame_when_camera_missing(
+    tmp_path, monkeypatch
+):
+    cfg_path = _write_full_cfg(tmp_path)
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+
+    def raise_runtime_error(*args, **kwargs):
+        raise RuntimeError("camera unavailable")
+
+    monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
+
+    mock_ui_class = MagicMock()
+    monkeypatch.setattr("scripts.main.CalibrationUI", mock_ui_class)
+
+    run_calibration(cfg, str(cfg_path), mock=False)
+
+    assert mock_ui_class.called
+    mock_ui_class.return_value.run.assert_called_once()

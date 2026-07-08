@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 
 
 class Camera:
@@ -20,3 +21,59 @@ class Camera:
 
     def release(self):
         self.cap.release()
+
+
+class MockCamera:
+    """Synthetic camera for UI testing without real USB cameras."""
+
+    def __init__(self, width=640, height=480, pattern="color_bars"):
+        self.width = int(width)
+        self.height = int(height)
+        self.pattern = pattern
+        self._counter = 0
+
+    def capture(self):
+        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+
+        if self.pattern == "color_bars":
+            bar_width = max(1, self.width // 8)
+            colors = [
+                (0, 0, 255),    # red
+                (0, 165, 255),  # orange
+                (0, 255, 255),  # yellow
+                (0, 255, 0),    # green
+                (255, 0, 0),    # blue
+                (255, 0, 255),  # magenta
+                (255, 255, 0),  # cyan
+                (255, 255, 255),  # white
+            ]
+            for i, color in enumerate(colors):
+                x1 = i * bar_width
+                x2 = min(self.width, x1 + bar_width)
+                frame[:, x1:x2] = color
+        elif self.pattern == "empty":
+            pass
+        else:
+            # checkerboard
+            square = max(20, min(self.width, self.height) // 8)
+            for y in range(0, self.height, square):
+                for x in range(0, self.width, square):
+                    if ((x // square) + (y // square)) % 2 == 0:
+                        color = (255, 255, 255)
+                    else:
+                        color = (0, 0, 0)
+                    y2 = min(self.height, y + square)
+                    x2 = min(self.width, x + square)
+                    frame[y:y2, x:x2] = color
+
+        if self.pattern != "empty":
+            label = f"MOCK CAMERA #{self._counter}"
+            cv2.putText(
+                frame, label, (10, 30),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2,
+            )
+        self._counter += 1
+        return True, frame
+
+    def release(self):
+        pass

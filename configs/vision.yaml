@@ -1,23 +1,18 @@
-# Crane 视觉模块运行时配置
-# 注意：辅助线位置会在 UI 校准后自动更新，请通过 python scripts/main.py --ui 调节
-
 serial:
   port: /dev/ttyUSB0
   baudrate: 115200
   timeout: 0.05
-
 cameras:
   bean:
     device: 0
-    width: 640
-    height: 480
+    width: 1280
+    height: 720
     buffer_size: 1
   digit:
     device: 2
-    width: 640
-    height: 480
+    width: 1280
+    height: 720
     buffer_size: 1
-
 models:
   bean:
     bin: assets/beans_v4.bin
@@ -25,27 +20,23 @@ models:
   digit:
     bin: assets/num.bin
     cfg: assets/num_rdkx5_config.yaml
-
 inference:
   imgsz: 640
   conf_thres: 0.25
   iou_thres: 0.45
   pad: 127
-
 scan:
   frames: 5
   max_retries: 2
   timeout_sec: 30
-
 lines:
   bean:
-    left_x: 213
-    right_x: 426
+    left_x: 439
+    right_x: 720
   digit:
-    horizontal_y: 240
-    left_x: 213
-    right_x: 426
-
+    horizontal_y: 398
+    left_x: 514
+    right_x: 728
 mapping:
   bean_to_digit:
     yellow: 1

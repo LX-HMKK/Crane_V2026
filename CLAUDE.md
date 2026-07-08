@@ -48,40 +48,64 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 
 以下命令均在仓库根目录执行。YOLOv5 训练/验证/导出命令引用 `tools/yolov5/` 中的脚本。
 
-### 视觉运行时命令
+### 开发/测试虚拟环境
 
-这些命令用于操作 RDK X5 竞赛运行时。`--ui` 校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
+本项目使用独立的 Miniforge 虚拟环境，避免与系统或其他项目的 `opencv-python` / `opencv-python-headless` 等包冲突：
+
+- 环境路径：`D:\conda_envs\crane-clean`
+- Python：3.11
+- 包源：USTC PyPI 镜像
+
+所有 x86 开发/测试命令均通过该环境执行：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python ...
+```
 
 #### 安装运行时/测试依赖
 
 ```bash
-pip install -r requirements.txt
+conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https://pypi.mirrors.ustc.edu.cn/simple -r requirements.txt
 ```
 
 #### 运行单元测试
 
 ```bash
-python -m pytest test/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
 ```
+
+### 视觉运行时命令
+
+这些命令用于操作 RDK X5 竞赛运行时。`--ui` 校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
 
 #### 使用实时预览校准辅助线
 
 ```bash
-python scripts/main.py --ui
+conda run --prefix /d/conda_envs/crane-clean python scripts/main.py
 ```
 
-按 `1` / `2` 切换豆子/数字相机视图，用鼠标拖动辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
+按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
+
+> `--ui` 仍可作为默认校准模式的向后兼容别名使用。在没有相机的 x86 开发机上，可配合 `--mock-cameras` 预览校准 UI。
+
+#### 无相机测试校准 UI
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --mock-cameras
+```
+
+使用合成帧启动校准 UI，用于无相机环境下的 UI 开发与辅助线布局测试。按 `ESC` 保存的辅助线位置同样写回 `configs/vision.yaml`。
 
 #### 列出可用相机
 
 ```bash
-python scripts/main.py --list-cameras
+conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --list-cameras
 ```
 
 #### 运行竞赛模式（仅限 RDK X5）
 
 ```bash
-python3 scripts/main.py
+python3 scripts/main.py --no-ui
 ```
 
 #### 自动重启竞赛模式
@@ -156,7 +180,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 ### RDKx5 板端推理
 
-完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main.py --ui` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
+完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
 - 输入：RGB NCHW `uint8` 张量，形状 `1×3×640×640`；归一化（`/255`）已编译进模型。
 - Letterbox 填充使用灰度值 `127`。
@@ -190,7 +214,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 - `lines.bean.left_x` / `lines.bean.right_x`：竖直辅助线，将豆子相机画面划分为取货区 ①–③。
 - `lines.digit.horizontal_y` / `lines.digit.left_x` / `lines.digit.right_x`：辅助线，将数字相机画面划分为放置区 ④–⑧。
 
-运行 `python scripts/main.py --ui` 可在实时预览上拖动辅助线；位置会自动写回 `configs/vision.yaml`。具体分区规则见 `docs/vision_mapping.md`。
+运行 `python scripts/main.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
 
 ## 提交代码
 

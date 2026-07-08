@@ -14,7 +14,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 from models.bean_model import BeanModel
-from models.camera import Camera
+from models.camera import Camera, MockCamera
 from models.digit_model import DigitModel
 from models.mapping import DEFAULT_BEAN_TO_DIGIT
 from models.serial_port import SerialPort
@@ -48,13 +48,26 @@ def list_cameras():
             cap.release()
 
 
-def _open_camera(camera_cfg):
-    return Camera(
-        camera_cfg["device"],
-        camera_cfg["width"],
-        camera_cfg["height"],
-        camera_cfg.get("buffer_size", 1),
-    )
+def _open_camera(camera_cfg, mock=False, fallback_empty=False):
+    if mock:
+        return MockCamera(camera_cfg["width"], camera_cfg["height"])
+    try:
+        return Camera(
+            camera_cfg["device"],
+            camera_cfg["width"],
+            camera_cfg["height"],
+            camera_cfg.get("buffer_size", 1),
+        )
+    except RuntimeError:
+        if fallback_empty:
+            logging.warning(
+                "Cannot open camera device %s; falling back to empty mock frame",
+                camera_cfg["device"],
+            )
+            return MockCamera(
+                camera_cfg["width"], camera_cfg["height"], pattern="empty"
+            )
+        raise
 
 
 def _load_models(cfg):
@@ -72,9 +85,13 @@ def _load_models(cfg):
     return bean_model, digit_model
 
 
-def run_calibration(cfg, cfg_path):
-    cam_bean = _open_camera(cfg["cameras"]["bean"])
-    cam_digit = _open_camera(cfg["cameras"]["digit"])
+def run_calibration(cfg, cfg_path, mock=False):
+    cam_bean = _open_camera(
+        cfg["cameras"]["bean"], mock=mock, fallback_empty=True
+    )
+    cam_digit = _open_camera(
+        cfg["cameras"]["digit"], mock=mock, fallback_empty=True
+    )
 
     try:
         bean_model = None
@@ -204,8 +221,25 @@ def main():
     parser.add_argument(
         "--config", default=str(ROOT / "configs" / "vision.yaml"), help="Path to vision.yaml"
     )
-    parser.add_argument("--ui", action="store_true", help="Run calibration UI")
+
+    ui_group = parser.add_mutually_exclusive_group()
+    ui_group.add_argument(
+        "--ui",
+        action="store_true",
+        help="Run calibration UI (default behavior, backward-compatible alias)",
+    )
+    ui_group.add_argument(
+        "--no-ui",
+        action="store_true",
+        help="Run competition mode",
+    )
+
     parser.add_argument("--list-cameras", action="store_true", help="List available cameras")
+    parser.add_argument(
+        "--mock-cameras",
+        action="store_true",
+        help="Use synthetic cameras for UI testing",
+    )
     args = parser.parse_args()
 
     init_logging()
@@ -216,10 +250,10 @@ def main():
 
     cfg = load_vision_cfg(args.config)
 
-    if args.ui:
-        run_calibration(cfg, args.config)
-    else:
+    if args.no_ui:
         run_competition(cfg)
+    else:
+        run_calibration(cfg, args.config, mock=args.mock_cameras)
 
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ models/                          # 视觉模块源码
   serial_port.py                 # START/TASK 串口帧
   mapping.py                     # 豆子类别 → 目标数字
   task_generator.py              # 辅助线分区 + 反向查找
-  ui.py                          # OpenCV 辅助线校准 UI
+  ui.py                          # tkinter 辅助线校准 UI
 scripts/
   main.py                        # 竞赛入口（状态机 + --ui 调试模式）
   watchdog.sh                    # 开机自启动 / 崩溃重启
@@ -33,16 +33,24 @@ test/                            # x86 可测单元测试
 
 ## 快速开始
 
+### 使用推荐虚拟环境
+
+本项目在 `D:\conda_envs\crane-clean` 维护了一个干净的 Miniforge 环境（Python 3.11，USTC 镜像），用于避免 `opencv-python` / `opencv-python-headless` 等包冲突。所有 x86 命令均建议通过该环境执行：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python ...
+```
+
 ### 安装依赖
 
 ```bash
-pip install -r requirements.txt
+conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https://pypi.mirrors.ustc.edu.cn/simple -r requirements.txt
 ```
 
 ### x86 测试
 
 ```bash
-python -m pytest test/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
 ```
 
 ### 板端使用
@@ -50,8 +58,9 @@ python -m pytest test/ -v
 1. 把 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 拷贝到 RDKx5。
 2. 上电校准：
    ```bash
-   python3 scripts/main.py --ui
+   python3 scripts/main.py
    ```
+   > 在 x86 开发机上没有相机时，可运行 `conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --mock-cameras` 预览校准 UI。
 3. 启动看门狗竞赛模式：
    ```bash
    ./scripts/watchdog.sh

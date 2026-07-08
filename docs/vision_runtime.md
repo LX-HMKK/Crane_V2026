@@ -5,18 +5,23 @@
 ## 启动方式
 
 ```bash
-# 竞赛模式（看门狗会自动调用）
+# 校准 UI（默认，调节辅助线、查看实时识别）
 python3 scripts/main.py
 
-# 校准 UI（调节辅助线、查看实时识别）
-python3 scripts/main.py --ui
+# 竞赛模式（看门狗会自动调用）
+python3 scripts/main.py --no-ui
 
 # 查看可用相机
 python3 scripts/main.py --list-cameras
 
 # 指定配置文件
 python3 scripts/main.py --config /path/to/vision.yaml
+
+# 无相机 UI 开发与测试（合成帧）
+python3 scripts/main.py --mock-cameras
 ```
+
+> `--ui` 仍是默认校准模式的向后兼容别名，与不带参数效果相同。`--mock-cameras` 使用合成帧替代真实相机，仅用于 UI 开发与测试，不会进行真实 BPU 推理。
 
 ## 配置字段
 
@@ -63,7 +68,7 @@ python -m pytest test/ -v
 ## 部署清单
 
 1. 将 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。
-2. 上电后先运行 `python3 scripts/main.py --ui` 校准辅助线。
+2. 上电后先运行 `python3 scripts/main.py` 校准辅助线。
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。
 5. 从下位机发送 START 帧，验证返回 TASK 帧。
