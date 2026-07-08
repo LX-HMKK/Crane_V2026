@@ -4,3 +4,4 @@ pyyaml
 numpy
 pytest
 Pillow
+ultralytics  # required by scripts/main_amd64.py for .pt inference on x86

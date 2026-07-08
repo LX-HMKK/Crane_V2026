@@ -5,23 +5,23 @@
 ## 启动方式
 
 ```bash
-# 校准 UI（默认，调节辅助线、查看实时识别）
-python3 scripts/main.py
+# RDK X5 校准 UI（默认，调节辅助线、查看实时识别）
+python3 scripts/main_arm64.py
 
-# 竞赛模式（看门狗会自动调用）
-python3 scripts/main.py --no-ui
+# RDK X5 竞赛模式（看门狗会自动调用）
+python3 scripts/main_arm64.py --no-ui
 
 # 查看可用相机
-python3 scripts/main.py --list-cameras
+python3 scripts/main_arm64.py --list-cameras
 
 # 指定配置文件
-python3 scripts/main.py --config /path/to/vision.yaml
+python3 scripts/main_arm64.py --config /path/to/vision.yaml
 
 # 无相机 UI 开发与测试（合成帧）
-python3 scripts/main.py --mock-cameras
+python3 scripts/main_arm64.py --mock-cameras
 ```
 
-> `--ui` 仍是默认校准模式的向后兼容别名，与不带参数效果相同。`--mock-cameras` 使用合成帧替代真实相机，仅用于 UI 开发与测试，不会进行真实 BPU 推理。
+> `--ui` 仍是默认校准模式的向后兼容别名，与不带参数效果相同。`--mock-cameras` 使用合成帧替代真实相机；在 RDK X5 上仍会加载 BPU 模型并执行真实推理，仅相机帧为合成，常用于无真实相机时的算法验证。
 
 ## 配置字段
 
@@ -56,19 +56,29 @@ INIT → WAIT_START → SCANNING → READY → SEND_TASK → DONE（回到 WAIT_
 ./scripts/watchdog.sh
 ```
 
-`main.py` 退出后会自动在 2 秒后重启。
+`main_arm64.py --no-ui` 退出后会自动在 2 秒后重启。
 
-## 开发测试
+## x86 开发与完整流程测试
+
+x86 主机没有 `hobot_dnn`，但 `main_amd64.py` 可以通过 `ultralytics` 加载 `assets/*.pt` 进行真实 PyTorch 推理，验证相机 → 模型 → 任务生成 → 结果打印的完整数据流。`crane-clean` 环境已安装 GPU 版依赖：
 
 ```bash
-# x86 全量单元测试（无需 hobot_dnn）
-python -m pytest test/ -v
+# 全量单元测试（无需 hobot_dnn / ultralytics）
+conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
+
+# 交互式预览：按 SPACE / s 扫描，ESC 退出（需要 ultralytics）
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
+
+# 单次扫描并退出
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
 ```
+
+在 `--mock-cameras` 且没有 `ultralytics` 的环境下，`main_amd64.py` 会进入 camera-only 模式，扫描后输出 `SCAN FAILED: task generator unavailable`，证明数据链路已打通。
 
 ## 部署清单
 
 1. 将 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。
-2. 上电后先运行 `python3 scripts/main.py` 校准辅助线。
+2. 上电后先运行 `python3 scripts/main_arm64.py` 校准辅助线。
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。
 5. 从下位机发送 START 帧，验证返回 TASK 帧。

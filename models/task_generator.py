@@ -30,6 +30,14 @@ class TaskGenerator:
             return "invalid bean line coordinate"
         if not all(self._is_number(digit[k]) for k in self._DIGIT_KEYS):
             return "invalid digit line coordinate"
+        if any(bean[k] < 0 for k in self._BEAN_KEYS):
+            return "bean line coordinates must be non-negative"
+        if any(digit[k] < 0 for k in self._DIGIT_KEYS):
+            return "digit line coordinates must be non-negative"
+        if bean["left_x"] >= bean["right_x"]:
+            return "bean left_x must be less than right_x"
+        if digit["left_x"] >= digit["right_x"]:
+            return "digit left_x must be less than right_x"
         return None
 
     @staticmethod

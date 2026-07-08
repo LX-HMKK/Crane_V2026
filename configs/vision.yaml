@@ -17,9 +17,11 @@ models:
   bean:
     bin: assets/beans_v4.bin
     cfg: assets/beans_v4_rdkx5_config.yaml
+    pt: assets/beans_v4.pt
   digit:
     bin: assets/num.bin
     cfg: assets/num_rdkx5_config.yaml
+    pt: assets/num.pt
 inference:
   imgsz: 640
   conf_thres: 0.25

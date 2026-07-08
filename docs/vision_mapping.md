@@ -24,7 +24,7 @@
 
 ## 辅助线分区规则
 
-辅助线位置保存在 `configs/vision.yaml` 的 `lines` 字段，可在 `scripts/main.py --ui` 中拖动调整。
+辅助线位置保存在 `configs/vision.yaml` 的 `lines` 字段，可在 `scripts/main_arm64.py --ui` 中拖动调整。
 
 ### 豆子相机（取货位 ①–③）
 

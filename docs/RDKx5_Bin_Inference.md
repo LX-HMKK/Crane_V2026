@@ -1,14 +1,14 @@
 # RDKx5 BPU `.bin` 模型板端调用指南
 
-本文档说明如何把 `hb_mapper` 编译出的 YOLO11 6 头 `.bin` 模型部署到 RDKx5 开发板上推理。`.bin` 的产生过程见 [RDKx5 导出工作流](RDKx5_Export_Workflow.md)。
+本文档说明如何把 `hb_mapper` 编译出的 YOLO11 6 头 `.bin` 模型部署到 RDKx5 开发板上推理。`.bin` 的产生过程见仓库根目录 `CLAUDE.md` 的“训练检测器 / 导出 ONNX”以及 `tools/yolov5/` 下的训练导出脚本。
 
 ## 1. 概述
 
-- **模型**：YOLO11 6 头解耦输出（P3/P4/P5 各一组 bbox + cls）。本文档假设你已经拥有 YOLO11 6-head ONNX 模型，并已完成 `hb_mapper makertbin` 编译为 BPU `.bin`。YOLOv5 导出桥 `tools/yolov5/export_rdkx5_onnx.py` 与本项目当前资产无关，请勿使用。
+- **模型**：YOLO11 6 头解耦输出（P3/P4/P5 各一组 bbox + cls）。本文档假设你已经拥有 YOLO11 6-head ONNX 模型，并已完成 `hb_mapper makertbin` 编译为 BPU `.bin`。
 - **输入**：`images`，`input_type_rt = nv12`、`input_type_train = rgb`、`input_layout_train = NCHW`，shape `1×3×640×640`
 - **归一化**：`norm_type = data_scale`、`scale_value = 1/255`，已编译进模型，板端喂 uint8 `[0,255]` 即可，不再除 255
 - **输出**：6 × FLOAT（3 个 bbox 头 `1×H×W×64` + 3 个 cls 头 `1×H×W×nc`）
-- **后处理**：DFL 解码 + 还原 xyxy + sigmoid + NMS，由 `scripts/main.py` 在板端调用
+- **后处理**：DFL 解码 + 还原 xyxy + sigmoid + NMS，由 `scripts/main_arm64.py` 在板端调用
 
 ## 2. 前置条件
 
@@ -17,7 +17,7 @@
 - **仅限 RDKx5 板端**：脚本依赖 `hobot_dnn`，Windows / 普通 x86 开发机无法运行（见 CLAUDE.md 常见坑 9）
 - Python3 + 依赖：
   ```bash
-  pip3 install opencv-python pyyaml numpy
+  pip3 install opencv-python pyyaml numpy pyserial Pillow
   # hobot_dnn 随 RDKx5 出厂镜像自带，无需单独安装
   ```
 
@@ -27,21 +27,24 @@
 
 | 文件 | 来源 | 作用 |
 |------|------|------|
-| `<name>_bayese_640x640_nv12.bin` | `assets/<exp>/rdkx5/` | BPU 编译后的模型 |
-| `<name>_rdkx5_config.yaml` | `assets/<exp>/rdkx5/` | 类别名、nc、imgsz、reg_max、strides |
-| `scripts/main.py` | 本项目 | 板端竞赛入口 / 校准 UI |
+| `assets/beans_v4.bin` | 本项目 | 豆子成熟度 BPU 模型 |
+| `assets/num.bin` | 本项目 | 数字检测 BPU 模型 |
+| `assets/beans_v4_rdkx5_config.yaml` | 本项目 | 豆子模型配置（nc、names、imgsz、reg_max、strides） |
+| `assets/num_rdkx5_config.yaml` | 本项目 | 数字模型配置 |
+| `models/` | 本项目 | 视觉运行时源码包 |
+| `scripts/main_arm64.py` | 本项目 | 板端竞赛入口 / 校准 UI |
 | `scripts/watchdog.sh` | 本项目 | 自启动 / 崩溃重启 |
-| 测试图片 | 自备 | cv2 能读的常见格式 |
+| `configs/vision.yaml` | 本项目（上板后可编辑） | 串口、相机、辅助线、映射配置 |
 
 从开发机拷到板端示例：
 ```bash
-scp assets/beans_v4/rdkx5/beans_v4_rdkx5_bayese_640x640_nv12.bin \
-    assets/beans_v4/rdkx5/beans_v4_rdkx5_config.yaml \
-    scripts/main.py scripts/watchdog.sh \
+scp -r models/ scripts/ configs/ \
+    assets/beans_v4.bin assets/num.bin \
+    assets/beans_v4_rdkx5_config.yaml assets/num_rdkx5_config.yaml \
     rdkx5:/home/root/crane/
 ```
 
-> 板端单图预览/校准请使用 `python3 scripts/main.py --ui`，不再单独维护 `scripts/deployment/infer_rdkx5_yolo11.py`。
+> 板端单图预览/校准请使用 `python3 scripts/main_arm64.py`（默认即校准 UI），无需额外单图推理脚本。
 
 ## 3. 配置文件说明
 
@@ -63,13 +66,25 @@ task: detect
 
 ## 4. 命令行调用
 
-单图测试与校准统一由 `scripts/main.py --ui` 完成：
+校准 UI（默认）：
 
 ```bash
-python3 scripts/main.py --ui
+python3 scripts/main_arm64.py
+```
+
+也可显式使用向后兼容的 `--ui` 别名：
+
+```bash
+python3 scripts/main_arm64.py --ui
 ```
 
 在 UI 中按 `1` / `2` 切换豆子/数字相机，按 ESC 退出。辅助线位置会自动保存到 `configs/vision.yaml`。
+
+指定配置文件：
+
+```bash
+python3 scripts/main_arm64.py --config /path/to/vision.yaml
+```
 
 竞赛模式由看门狗调用，无需手动执行：
 
@@ -77,11 +92,9 @@ python3 scripts/main.py --ui
 ./scripts/watchdog.sh
 ```
 
-> 旧的 `infer_rdkx5_yolo11.py` 单图推理脚本已不再单独维护。
-
 ## 5. 推理流程
 
-`scripts/main.py` 内部的处理链：
+`scripts/main_arm64.py` 内部的处理链：
 
 1. **加载模型**：`dnn.load(model)` → 取 `models[0]`
 2. **读图**：`cv2.imread`（BGR）
@@ -113,7 +126,7 @@ python3 scripts/main.py --ui
 1. **DFL 解码**：`bbox (...,64)` → reshape `(...,4,16)` → softmax → 与 `[0..15]` 加权求和 → `(...,4)` 回归值
 2. **还原 xyxy**：YOLO11 回归输出到网格中心的 `l,t,r,b` 距离，结合网格中心 `(x+0.5, y+0.5)` × stride 还原到输入尺度 xyxy
 3. **类别分数**：cls 做 sigmoid，最大值为 `conf`、argmax 为 `cls_id`，按 `conf_thres` 过滤
-4. **NMS**：`cv2.dnn.NMSBoxes` 按 `iou_thres` 去重
+4. **NMS**：按类别分组执行 `cv2.dnn.NMSBoxes`，仅抑制同一类内的重叠框
 5. **回映原图**：`(coord - pad) / scale`
 
 最终每行检测：`[x1, y1, x2, y2, conf, cls_id]`（原图像素坐标）。
@@ -123,8 +136,8 @@ python3 scripts/main.py --ui
 1. **`hobot_dnn` 依赖**：仅 RDKx5 出厂镜像可用，开发机跑不了；上板前可在开发机用 ONNX 跑通后处理逻辑（用 ONNX Runtime 代替 `m.forward`）。
 2. **NV12 输入的坑**：模型 `input_type_rt = nv12`，但当前脚本走的是 **RGB NCHW uint8** 路径（直接 `m.forward`），并未显式构造 NV12。脚本注释提示"真 NV12 模型应使用 hobot_dnn 的 helper"。若板端 `m.forward` 不接受 RGB uint8、或精度异常，需改用 `hobot_dnn` 的 NV12 / YUV420SP 输入接口（参考 RDK Model Zoo 的 yolov11 示例）。**上板后先单图验证精度再批量跑。**
 3. **pad 值 = 127**：letterbox 空白填 127（灰），与导出时校准数据预处理保持一致；改预处理要同步改校准数据。
-4. **`--cfg` 命名**：见第 4 节，默认推导名与实际文件名不一致，建议显式传 `--cfg`。
-5. **类别数 `nc`**：脚本默认 `nc=5`（数字检测遗留）；豆子模型 `nc=3`，必须靠 config yaml 覆盖，否则 cls 解码维度错。
+4. **`--config` 命名**：默认使用 `configs/vision.yaml`；若自定义路径请显式传 `--config <path>`。
+5. **类别数 `nc`**：脚本读取 `_rdkx5_config.yaml` 中的 `nc`；豆子模型 `nc=3`、数字模型 `nc=10`，必须靠 config yaml 覆盖，否则 cls 解码维度错。
 6. **不输出可视化**：当前脚本只 print 检测结果，不画框、不保存。需要可视化可自行加 `cv2.rectangle` + `cv2.imwrite`。
 
 ## 8. 常见问题
@@ -132,13 +145,14 @@ python3 scripts/main.py --ui
 | 现象 | 排查 |
 |------|------|
 | `ModuleNotFoundError: hobot_dnn` | 不在 RDKx5 板端环境；该脚本不能在开发机跑 |
-| `FileNotFoundError: ..._config.yaml` | `--cfg` 默认推导名与实际文件不符，显式传 `--cfg <path>` |
+| `FileNotFoundError: ..._config.yaml` | `--config` 默认读取 `configs/vision.yaml` 中指定的 `_rdkx5_config.yaml`；检查文件是否已拷到板端 |
 | 检测全无 / 置信度极低 | 检查 `nc` 是否匹配；检查 NV12 输入路径（注意事项 2）；检查 letterbox pad 值 |
 | 坐标偏移 | 确认 `strides` / `reg_max` 与模型一致；确认坐标回映的 `scale` / `pad` 未被改动 |
 | 类别错乱 | `names` dict 的 key 必须是 int（yaml 里 `0:` 会被解析为 int）；手改 yaml 注意别写成字符串 key |
 
 ## 9. 相关文档
 
-- [RDKx5 导出工作流](RDKx5_Export_Workflow.md) —— `.pt` → ONNX → `.bin` 的完整流程与环境搭建
-- `scripts/main.py` —— 本文描述的板端竞赛入口/校准 UI
+- `CLAUDE.md` —— 仓库根目录的常用命令与项目结构说明
+- `tools/yolov5/` —— 训练与 ONNX 导出脚本
+- `scripts/main_arm64.py` —— 本文描述的板端竞赛入口/校准 UI
 - CLAUDE.md 常见坑 9 —— `hobot_dnn` 板端依赖说明

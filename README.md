@@ -24,9 +24,11 @@ models/                          # 视觉模块源码
   serial_port.py                 # START/TASK 串口帧
   mapping.py                     # 豆子类别 → 目标数字
   task_generator.py              # 辅助线分区 + 反向查找
+  runtime.py                     # 入口共享：相机/模型/扫描/任务生成
   ui.py                          # tkinter 辅助线校准 UI
 scripts/
-  main.py                        # 竞赛入口（状态机 + --ui 调试模式）
+  main_arm64.py                  # RDK X5 部署入口（竞赛 + 校准）
+  main_amd64.py                  # x86 本机完整流程测试入口（无串口，使用 .pt）
   watchdog.sh                    # 开机自启动 / 崩溃重启
 test/                            # x86 可测单元测试
 ```
@@ -53,14 +55,30 @@ conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https
 conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
 ```
 
+### x86 完整流程测试（无串口）
+
+使用 `main_amd64.py` 在本机验证相机 → 模型 → 任务生成 → 结果打印的完整流程。它读取 `configs/vision.yaml` 中的 `models.*.pt`，通过 `ultralytics` 加载 PyTorch 模型。`crane-clean` 环境已安装 GPU 版依赖：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
+```
+
+按 `SPACE` 或 `s` 触发一次扫描，控制台会打印 `SCAN RESULT: x y z` 或失败原因；按 `ESC` 退出。单次扫描：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
+```
+
+若当前环境没有 `ultralytics`，会自动退回到 camera-only 模式。
+
 ### 板端使用
 
 1. 把 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 拷贝到 RDKx5。
 2. 上电校准：
    ```bash
-   python3 scripts/main.py
+   python3 scripts/main_arm64.py
    ```
-   > 在 x86 开发机上没有相机时，可运行 `conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --mock-cameras` 预览校准 UI。
+   > 在 x86 开发机上没有相机时，可运行 `conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock-cameras` 预览校准 UI。
 3. 启动看门狗竞赛模式：
    ```bash
    ./scripts/watchdog.sh

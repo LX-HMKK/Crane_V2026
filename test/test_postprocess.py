@@ -38,8 +38,172 @@ def test_postprocess_returns_empty_for_zero_tensors():
 
 def test_scale_coords_reverses_letterbox():
     dets = np.array([[100, 100, 200, 200, 0.9, 0]], dtype=np.float32)
-    scaled = scale_coords(dets, scale=1.0, pad=(10, 20))
+    scaled = scale_coords(dets, scale=1.0, pad=(10, 20), img_shape=(480, 640))
     assert scaled[0, 0] == 90
     assert scaled[0, 1] == 80
     assert scaled[0, 2] == 190
     assert scaled[0, 3] == 180
+
+
+def test_scale_coords_clips_to_image_bounds():
+    dets = np.array([[-10, -20, 650, 660, 0.9, 0]], dtype=np.float32)
+    scaled = scale_coords(dets, scale=1.0, pad=(0, 0), img_shape=(480, 640))
+    assert scaled[0, 0] == 0
+    assert scaled[0, 1] == 0
+    assert scaled[0, 2] == 640
+    assert scaled[0, 3] == 480
+
+
+def _encode_dfl_distance(dist, reg_max, peak=10.0):
+    """Create a sharp DFL logit vector whose expected value is approximately dist."""
+    bin_idx = int(round(np.clip(dist, 0, reg_max - 1)))
+    vec = np.zeros(reg_max, dtype=np.float32)
+    vec[bin_idx] = peak
+    return vec
+
+
+def make_yolo11_outputs(dets, cfg):
+    """Build deterministic 6-head YOLO11 raw outputs that decode to ``dets``.
+
+    ``dets`` must be in letterboxed image coordinates, i.e. after letterbox
+    resizing/padding.  Each det is ``[x1, y1, x2, y2, conf, cls_id]``.
+    """
+    imgsz = cfg["imgsz"]
+    if isinstance(imgsz, int):
+        imgsz_h = imgsz_w = imgsz
+    else:
+        imgsz_h, imgsz_w = imgsz
+    nc = cfg["nc"]
+    reg_max = cfg["reg_max"]
+    strides = cfg["strides"]
+
+    level_info = []
+    bbox_outputs = []
+    cls_outputs = []
+    for stride in strides:
+        h = imgsz_h // stride
+        w = imgsz_w // stride
+        xv, yv = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
+        xv = (xv + 0.5) * stride
+        yv = (yv + 0.5) * stride
+        anchors = np.stack([xv.ravel(), yv.ravel()], axis=-1)
+        level_info.append({"stride": stride, "h": h, "w": w, "anchors": anchors})
+        bbox_outputs.append(np.zeros((1, h, w, 4 * reg_max), dtype=np.float32))
+        # Use a negative baseline so only the explicitly-set anchor activates.
+        cls_outputs.append(np.full((1, h, w, nc), -10.0, dtype=np.float32))
+
+    for det in dets:
+        x1, y1, x2, y2, conf, cls_id = det
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+
+        chosen = None
+        for lvl in level_info:
+            stride, h, w, anchors = lvl["stride"], lvl["h"], lvl["w"], lvl["anchors"]
+            gx = int(cx // stride)
+            gy = int(cy // stride)
+            if 0 <= gx < w and 0 <= gy < h:
+                idx = gy * w + gx
+                chosen = (lvl, idx)
+                break
+        if chosen is None:
+            raise ValueError(f"detection {det} does not fit any stride grid")
+
+        lvl, idx = chosen
+        stride, h, w, anchors = lvl["stride"], lvl["h"], lvl["w"], lvl["anchors"]
+        ax, ay = anchors[idx]
+        l = ax - x1
+        t = ay - y1
+        r = x2 - ax
+        b = y2 - ay
+
+        dfl = np.concatenate(
+            [_encode_dfl_distance(d, reg_max) for d in (l, t, r, b)]
+        )
+        out_h = idx // w
+        out_w = idx % w
+        level_idx = level_info.index(lvl)
+        bbox_outputs[level_idx][0, out_h, out_w, :] = dfl
+        cls_outputs[level_idx][0, out_h, out_w, int(cls_id)] = 10.0
+
+    outputs = bbox_outputs + cls_outputs
+    return outputs
+
+
+def test_postprocess_decodes_single_detection():
+    cfg = {
+        "imgsz": 640,
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.25,
+        "iou_thres": 0.45,
+    }
+    # A small box whose edge distances fit inside reg_max=16 bins.
+    dets = [[300.0, 300.0, 320.0, 320.0, 0.9, 1]]
+    outputs = make_yolo11_outputs(dets, cfg)
+    result = postprocess(outputs, cfg)
+    assert result.shape[0] == 1
+    assert int(result[0, 5]) == 1
+    assert result[0, 4] > 0.9
+    # Tolerance for DFL quantization.
+    np.testing.assert_allclose(result[0, :4], [300, 300, 320, 320], atol=2.0)
+
+
+def test_postprocess_class_aware_nms_keeps_overlapping_different_classes():
+    cfg = {
+        "imgsz": 640,
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.25,
+        "iou_thres": 0.45,
+    }
+    # Two nearly identical boxes of different classes; class-agnostic NMS would drop one.
+    dets = [
+        [286.0, 286.0, 366.0, 366.0, 0.9, 0],
+        [288.0, 288.0, 368.0, 368.0, 0.85, 1],
+    ]
+    outputs = make_yolo11_outputs(dets, cfg)
+    result = postprocess(outputs, cfg)
+    assert result.shape[0] == 2
+    classes = set(int(r[5]) for r in result)
+    assert classes == {0, 1}
+
+
+def test_postprocess_class_aware_nms_suppresses_same_class_duplicates():
+    cfg = {
+        "imgsz": 640,
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.25,
+        "iou_thres": 0.45,
+    }
+    # Two heavily overlapping boxes of the same class; only the higher-conf one survives.
+    dets = [
+        [286.0, 286.0, 366.0, 366.0, 0.9, 2],
+        [288.0, 288.0, 368.0, 368.0, 0.85, 2],
+    ]
+    outputs = make_yolo11_outputs(dets, cfg)
+    result = postprocess(outputs, cfg)
+    assert result.shape[0] == 1
+    assert int(result[0, 5]) == 2
+    assert result[0, 4] > 0.89
+
+
+def test_postprocess_rectangular_imgsz():
+    cfg = {
+        "imgsz": [384, 640],
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.25,
+        "iou_thres": 0.45,
+    }
+    # Small box in 640x384 space with edge distances inside reg_max bins.
+    dets = [[300.0, 150.0, 320.0, 170.0, 0.9, 0]]
+    outputs = make_yolo11_outputs(dets, cfg)
+    result = postprocess(outputs, cfg)
+    assert result.shape[0] == 1
+    np.testing.assert_allclose(result[0, :4], [300, 150, 320, 170], atol=2.0)

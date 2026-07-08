@@ -160,6 +160,27 @@ def test_generate_task_malformed_lines():
     assert "invalid bean line config" in reason
 
 
+def test_generate_task_reversed_bean_lines():
+    mapping, bean_names, digit_names = make_names()
+    lines = make_lines()
+    lines["bean"]["left_x"] = 500
+    lines["bean"]["right_x"] = 100
+    gen = TaskGenerator(mapping, lines, bean_names, digit_names)
+    result, reason = gen.generate([], [])
+    assert result is None
+    assert "left_x must be less than right_x" in reason
+
+
+def test_generate_task_negative_line_coordinate():
+    mapping, bean_names, digit_names = make_names()
+    lines = make_lines()
+    lines["digit"]["left_x"] = -10
+    gen = TaskGenerator(mapping, lines, bean_names, digit_names)
+    result, reason = gen.generate([], [])
+    assert result is None
+    assert "non-negative" in reason
+
+
 def test_generate_task_malformed_digit_lines():
     mapping, bean_names, digit_names = make_names()
     gen = TaskGenerator(

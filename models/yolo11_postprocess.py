@@ -33,9 +33,14 @@ def letterbox(im, new_shape=(640, 640), color=127, stride=32):
 
 def _make_anchors(imgsz, strides):
     """Generate anchor centers for each stride."""
+    if isinstance(imgsz, int):
+        imgsz_h = imgsz_w = imgsz
+    else:
+        imgsz_h, imgsz_w = imgsz
     anchors = []
     for stride in strides:
-        h = w = imgsz // stride
+        h = imgsz_h // stride
+        w = imgsz_w // stride
         xv, yv = np.meshgrid(np.arange(w, dtype=np.float32), np.arange(h, dtype=np.float32))
         xv = (xv + 0.5) * stride
         yv = (yv + 0.5) * stride
@@ -59,18 +64,23 @@ def postprocess(outputs, cfg):
     Returns: ndarray of shape (N, 6) -> [x1, y1, x2, y2, conf, cls_id]
     """
     imgsz = cfg["imgsz"]
+    if isinstance(imgsz, int):
+        imgsz_h = imgsz_w = imgsz
+    else:
+        imgsz_h, imgsz_w = imgsz
     nc = cfg["nc"]
     reg_max = cfg["reg_max"]
     strides = cfg["strides"]
     conf_thres = cfg.get("conf_thres", 0.25)
     iou_thres = cfg.get("iou_thres", 0.45)
 
-    anchors = _make_anchors(imgsz, strides)
+    anchors = _make_anchors((imgsz_h, imgsz_w), strides)
 
     dfl_parts = []
     cls_parts = []
     for i, stride in enumerate(strides):
-        h = w = imgsz // stride
+        h = imgsz_h // stride
+        w = imgsz_w // stride
         dfl_parts.append(outputs[i].reshape(-1, 4 * reg_max))
         cls_parts.append(outputs[i + 3].reshape(-1, nc))
 
@@ -97,32 +107,42 @@ def postprocess(outputs, cfg):
     if len(xyxy) == 0:
         return np.zeros((0, 6), dtype=np.float32)
 
-    indices = cv2.dnn.NMSBoxes(
-        [xyxy[i].tolist() for i in range(len(xyxy))],
-        conf.tolist(),
-        conf_thres,
-        iou_thres,
-    )
+    # Class-aware NMS: do not suppress boxes of different classes.
+    keep = []
+    for cls in np.unique(cls_id):
+        mask = cls_id == cls
+        idxs = np.where(mask)[0]
+        boxes = [xyxy[i].tolist() for i in idxs]
+        scores = conf[mask].tolist()
+        selected = cv2.dnn.NMSBoxes(boxes, scores, conf_thres, iou_thres)
+        if len(selected) == 0:
+            continue
+        if isinstance(selected, tuple):
+            selected = selected[0]
+        keep.extend(idxs[selected.flatten()])
 
-    if len(indices) == 0:
+    if len(keep) == 0:
         return np.zeros((0, 6), dtype=np.float32)
 
-    if isinstance(indices, tuple):
-        indices = indices[0]
-    indices = indices.flatten()
+    keep = np.array(keep, dtype=int)
+    order = np.argsort(-conf[keep])
+    keep = keep[order]
 
     dets = np.concatenate(
-        [xyxy[indices], conf[indices][:, None], cls_id[indices][:, None]],
+        [xyxy[keep], conf[keep][:, None], cls_id[keep][:, None]],
         axis=1,
     )
     return dets
 
 
-def scale_coords(dets, scale, pad):
+def scale_coords(dets, scale, pad, img_shape):
     """Map detection coordinates from letterbox space back to original image."""
     dets = dets.copy()
     left, top = pad
     dets[:, [0, 2]] -= left
     dets[:, [1, 3]] -= top
     dets[:, :4] /= scale
+    height, width = img_shape[:2]
+    dets[:, [0, 2]] = np.clip(dets[:, [0, 2]], 0, width)
+    dets[:, [1, 3]] = np.clip(dets[:, [1, 3]], 0, height)
     return dets

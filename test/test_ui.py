@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 from models.camera import MockCamera
 from models.ui import CalibrationUI
-from scripts.main import run_calibration
+from scripts.main_arm64 import run_calibration
 
 
 def _write_cfg(tmp_path, values=None):
@@ -309,7 +309,7 @@ def test_run_calibration_uses_empty_frame_when_camera_missing(
     monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
 
     mock_ui_class = MagicMock()
-    monkeypatch.setattr("scripts.main.CalibrationUI", mock_ui_class)
+    monkeypatch.setattr("scripts.main_arm64.CalibrationUI", mock_ui_class)
 
     run_calibration(cfg, str(cfg_path), mock=False)
 

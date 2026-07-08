@@ -32,8 +32,9 @@ models/            # 视觉运行时源码
                    #   bean_model.py, digit_model.py, camera.py
                    #   serial_port.py, task_generator.py, mapping.py, ui.py
 scripts/           # 视觉运行时入口
-                   #   main.py     – 竞赛模式 + 校准 UI
-                   #   watchdog.sh – main.py 自动重启脚本
+                   #   main_arm64.py – RDK X5 部署入口（竞赛 + 校准）
+                   #   main_amd64.py – x86 本机完整流程测试入口
+                   #   watchdog.sh – main_arm64.py 自动重启脚本
                    #   .gitkeep
 test/              # x86 单元测试（mock hobot_dnn）
 requirements.txt   # 运行时/测试依赖
@@ -81,7 +82,7 @@ conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
 #### 使用实时预览校准辅助线
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main.py
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py
 ```
 
 按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
@@ -91,7 +92,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main.py
 #### 无相机测试校准 UI
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --mock-cameras
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock-cameras
 ```
 
 使用合成帧启动校准 UI，用于无相机环境下的 UI 开发与辅助线布局测试。按 `ESC` 保存的辅助线位置同样写回 `configs/vision.yaml`。
@@ -99,13 +100,13 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --mock-camer
 #### 列出可用相机
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main.py --list-cameras
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --list-cameras
 ```
 
 #### 运行竞赛模式（仅限 RDK X5）
 
 ```bash
-python3 scripts/main.py --no-ui
+python3 scripts/main_arm64.py --no-ui
 ```
 
 #### 自动重启竞赛模式
@@ -113,6 +114,22 @@ python3 scripts/main.py --no-ui
 ```bash
 ./scripts/watchdog.sh
 ```
+
+#### x86 完整流程测试（无串口）
+
+`main_amd64.py` 使用 `assets/*.pt` 进行 PyTorch 推理（依赖 `ultralytics`）。当前 `crane-clean` 环境已安装 GPU 版 `torch 2.5.1+cu121` 和 `ultralytics`，可直接运行：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
+```
+
+按 `SPACE` 或 `s` 触发一次扫描，控制台打印 `SCAN RESULT: x y z` 或失败原因，按 `ESC` 退出。要单次扫描并退出，可加上 `--once`：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
+```
+
+如果当前环境没有 `ultralytics`，`main_amd64.py` 会自动退回到 camera-only 模式并打印 `SCAN FAILED: task generator unavailable`。
 
 ### 安装依赖（YOLOv5 训练）
 
@@ -180,7 +197,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 ### RDKx5 板端推理
 
-完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
+完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main_arm64.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main_arm64.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
 - 输入：RGB NCHW `uint8` 张量，形状 `1×3×640×640`；归一化（`/255`）已编译进模型。
 - Letterbox 填充使用灰度值 `127`。
@@ -214,7 +231,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 - `lines.bean.left_x` / `lines.bean.right_x`：竖直辅助线，将豆子相机画面划分为取货区 ①–③。
 - `lines.digit.horizontal_y` / `lines.digit.left_x` / `lines.digit.right_x`：辅助线，将数字相机画面划分为放置区 ④–⑧。
 
-运行 `python scripts/main.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
+运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
 
 ## 提交代码
 
@@ -240,7 +257,7 @@ Remove-Item .git-msg
 
 ## 重要注意事项
 
-- 请勿在开发机上以竞赛模式运行 `scripts/main.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`--ui` 校准视图和单元测试可在 x86 上安全运行。
+- 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`main_arm64.py` 校准视图、`main_amd64.py` 和单元测试可在 x86 上安全运行。
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。

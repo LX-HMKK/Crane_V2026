@@ -23,7 +23,16 @@ class Yolo11Model:
     @staticmethod
     def _normalize_names(names):
         if isinstance(names, dict):
-            return names
+            normalized = {}
+            for key, value in names.items():
+                try:
+                    cls_id = int(key)
+                except (ValueError, TypeError) as exc:
+                    raise ValueError(
+                        f"names key must be int-convertible, got {key!r}"
+                    ) from exc
+                normalized[cls_id] = str(value)
+            return normalized
         if isinstance(names, (list, tuple)):
             return {i: str(name) for i, name in enumerate(names)}
         raise TypeError(
@@ -44,8 +53,12 @@ class Yolo11Model:
                 f"input image must have 3 channels (BGR), got {bgr_image.shape[2]}"
             )
 
+        if isinstance(self.imgsz, int):
+            new_shape = (self.imgsz, self.imgsz)
+        else:
+            new_shape = tuple(self.imgsz)
         letterboxed, scale, pad = letterbox(
-            bgr_image, new_shape=(self.imgsz, self.imgsz), color=self.pad
+            bgr_image, new_shape=new_shape, color=self.pad
         )
         rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
         tensor = np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.uint8)
@@ -59,5 +72,5 @@ class Yolo11Model:
             "iou_thres": self.iou_thres,
         }
         dets = postprocess(outputs, post_cfg)
-        dets = scale_coords(dets, scale, pad)
-        return dets
+        dets = scale_coords(dets, scale, pad, bgr_image.shape)
+        return dets.tolist()

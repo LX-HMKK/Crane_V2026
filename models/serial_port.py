@@ -1,3 +1,4 @@
+import numbers
 import struct
 import time
 
@@ -38,10 +39,13 @@ class SerialPort:
     def send_task(self, p1, p2, p3):
         """Send a fixed 7-byte TASK frame: BB 66 p1 p2 p3 1B 1A."""
         for p in (p1, p2, p3):
-            if not isinstance(p, int) or not (0 <= p <= 255):
-                raise ValueError(f"TASK payload values must be 0-255 ints, got {p!r}")
+            if not isinstance(p, numbers.Integral) or not (0 <= p <= 255):
+                raise ValueError(
+                    f"TASK payload values must be 0-255 ints, got {p!r}"
+                )
         frame = TASK_HEAD + bytes([p1, p2, p3]) + TASK_TAIL
         self.ser.write(frame)
+        self.ser.flush()
 
     def close(self):
         self.ser.close()

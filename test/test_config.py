@@ -14,6 +14,8 @@ def test_vision_yaml_exists_and_parses():
     assert cfg["serial"]["baudrate"] == 115200
     assert cfg["cameras"]["bean"]["device"] == 0
     assert cfg["mapping"]["bean_to_digit"]["yellow"] == 1
+    assert cfg["models"]["bean"]["pt"] == "assets/beans_v4.pt"
+    assert cfg["models"]["digit"]["pt"] == "assets/num.pt"
 
 
 def test_models_package_exists():

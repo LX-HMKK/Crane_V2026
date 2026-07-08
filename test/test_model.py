@@ -193,14 +193,26 @@ def create_dummy_cfg(path, names):
     return cfg
 
 
-_FAKE_OUTPUTS = [
-    np.zeros((1, 80, 80, 64), dtype=np.float32),
-    np.zeros((1, 40, 40, 64), dtype=np.float32),
-    np.zeros((1, 20, 20, 64), dtype=np.float32),
-    np.zeros((1, 80, 80, 3), dtype=np.float32),
-    np.zeros((1, 40, 40, 3), dtype=np.float32),
-    np.zeros((1, 20, 20, 3), dtype=np.float32),
-]
+def _fake_outputs_for_cfg(cfg):
+    """Generate zero-filled 6-head outputs with the correct shapes for cfg."""
+    imgsz = cfg["imgsz"]
+    if isinstance(imgsz, int):
+        imgsz_h = imgsz_w = imgsz
+    else:
+        imgsz_h, imgsz_w = imgsz
+    reg_max = cfg["reg_max"]
+    nc = cfg["nc"]
+    strides = cfg["strides"]
+    outputs = []
+    for stride in strides:
+        h = imgsz_h // stride
+        w = imgsz_w // stride
+        outputs.append(np.zeros((1, h, w, 4 * reg_max), dtype=np.float32))
+    for stride in strides:
+        h = imgsz_h // stride
+        w = imgsz_w // stride
+        outputs.append(np.zeros((1, h, w, nc), dtype=np.float32))
+    return outputs
 
 
 @pytest.mark.parametrize("model_class", [BeanModel, DigitModel])
@@ -211,7 +223,7 @@ def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
     with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
-        bpu.infer.return_value = _FAKE_OUTPUTS
+        bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
         MockBpu.return_value = bpu
 
         model = model_class(
@@ -219,7 +231,7 @@ def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
         )
         img = np.zeros((480, 640, 3), dtype=np.uint8)
         dets = model.predict(img)
-        assert dets.shape[0] == 0
+        assert len(dets) == 0
         bpu.infer.assert_called_once()
         tensor = bpu.infer.call_args[0][0]
         assert tensor.shape == (1, 3, 640, 640)
@@ -233,7 +245,7 @@ def test_model_predict_asserts_tensor_rgb_order(tmp_path):
     with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
-        bpu.infer.return_value = _FAKE_OUTPUTS
+        bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
         MockBpu.return_value = bpu
 
         model = BeanModel(
@@ -272,3 +284,126 @@ def test_model_predict_rejects_bad_input(model_class, tmp_path):
 
         with pytest.raises(ValueError, match="3 channels"):
             model.predict(np.zeros((480, 640, 1), dtype=np.uint8))
+
+
+def test_model_normalize_names_int_keys(tmp_path):
+    cfg_path = tmp_path / "names.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    # YAML may load integer-like keys as strings; _normalize_names must coerce them.
+    cfg["names"] = {"0": "white", "1": "green", "2": "yellow"}
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        MockBpu.return_value = bpu
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        assert model.names == {0: "white", 1: "green", 2: "yellow"}
+
+
+def test_model_normalize_names_rejects_non_int_keys(tmp_path):
+    cfg_path = tmp_path / "names.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    cfg["names"] = {"a": "white", "1": "green", "2": "yellow"}
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        MockBpu.return_value = bpu
+        with pytest.raises(ValueError, match="int-convertible"):
+            BeanModel("assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45})
+
+
+def test_model_predict_rectangular_imgsz(tmp_path):
+    cfg_path = tmp_path / "rect.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    cfg["imgsz"] = [384, 640]
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
+        MockBpu.return_value = bpu
+
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        img = np.zeros((384, 640, 3), dtype=np.uint8)
+        dets = model.predict(img)
+        assert isinstance(dets, list)
+        tensor = bpu.infer.call_args[0][0]
+        assert tensor.shape == (1, 3, 384, 640)
+
+
+@pytest.mark.parametrize(
+    "bad_cfg,error_match",
+    [
+        ({"imgsz": -640}, "positive"),
+        ({"imgsz": [640, -640]}, "positive ints"),
+        ({"nc": "3"}, "positive integer"),
+        ({"names": {0: "white"}}, "length"),  # names length != nc
+        ({"names": ["white"]}, "length"),
+        ({"names": {"a": "white", 1: "green", 2: "yellow"}}, "int-convertible"),
+        ({"reg_max": 0}, "positive integer"),
+        ({"strides": []}, "non-empty"),
+        ({"strides": [8, -16, 32]}, "positive integer"),
+    ],
+)
+def test_bpu_model_config_validation(tmp_path, monkeypatch, bad_cfg, error_match):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    base = {"imgsz": 640, "nc": 3, "names": {0: "white", 1: "green", 2: "yellow"}, "reg_max": 16, "strides": [8, 16, 32]}
+    base.update(bad_cfg)
+    cfg_file = tmp_path / "bad.yaml"
+    with open(cfg_file, "w", encoding="utf-8") as f:
+        yaml.safe_dump(base, f)
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    monkeypatch.setattr(
+        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        BpuModel(str(bin_file), str(cfg_file))
+
+
+def test_bpu_model_infer_rejects_wrong_spatial_shape(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    cfg, cfg_file = _write_cfg(tmp_path, imgsz=640)
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    mock_model = mock.Mock()
+    monkeypatch.setattr(
+        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
+    )
+
+    model = BpuModel(str(bin_file), str(cfg_file))
+    with pytest.raises(ValueError, match="spatial shape"):
+        model.infer(np.zeros((1, 3, 480, 640), dtype=np.uint8))
+
+
+def test_bpu_model_infer_accepts_list_imgsz(tmp_path, monkeypatch):
+    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+
+    cfg, cfg_file = _write_cfg(tmp_path, imgsz=[384, 640])
+    bin_file = tmp_path / "num.bin"
+    bin_file.write_text("fake bin")
+
+    mock_model = mock.Mock()
+    monkeypatch.setattr(
+        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
+    )
+
+    model = BpuModel(str(bin_file), str(cfg_file))
+    tensor = np.zeros((1, 3, 384, 640), dtype=np.uint8)
+    model.infer(tensor)
+    mock_model.forward.assert_called_once()
+
+
+_FAKE_OUTPUTS = _fake_outputs_for_cfg(
+    {"imgsz": 640, "nc": 3, "reg_max": 16, "strides": [8, 16, 32]}
+)
