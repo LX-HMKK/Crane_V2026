@@ -27,6 +27,19 @@ SLIDER_DEFS = {
     ],
 }
 
+DEFAULT_UI_CFG = {
+    "window": {"fullscreen": False, "width": 1024, "height": 600},
+    "video": {"max_height": 420, "fit_mode": "contain"},
+    "controls": {
+        "touch_mode": False,
+        "slider_width": 15,
+        "slider_height": 20,
+        "button_height": 30,
+        "padding": 5,
+        "font_scale": 1.0,
+    },
+}
+
 
 class CalibrationUI:
     """Tkinter-based calibration UI.
@@ -54,6 +67,7 @@ class CalibrationUI:
         self._running = False
 
         self._load_cfg()
+        self._apply_ui_cfg()
         self._resolve_trackbar_limits()
 
         if root is None:
@@ -71,6 +85,95 @@ class CalibrationUI:
     def _load_cfg(self):
         with open(self.cfg_path, "r", encoding="utf-8") as f:
             self.cfg = yaml.safe_load(f)
+
+    def _apply_ui_cfg(self):
+        """Merge UI config with defaults and pre-compute derived values."""
+        import copy
+
+        ui_cfg = copy.deepcopy(DEFAULT_UI_CFG)
+        if self.cfg and isinstance(self.cfg.get("ui"), dict):
+            ui_cfg["window"].update(self.cfg["ui"].get("window", {}))
+            ui_cfg["video"].update(self.cfg["ui"].get("video", {}))
+            ui_cfg["controls"].update(self.cfg["ui"].get("controls", {}))
+        self.ui_cfg = ui_cfg
+
+        win = ui_cfg["window"]
+        self.window_width = int(win["width"])
+        self.window_height = int(win["height"])
+        self.fullscreen = bool(win.get("fullscreen", False))
+
+        vid = ui_cfg["video"]
+        self.video_max_height = int(vid["max_height"])
+        self.video_fit_mode = str(vid.get("fit_mode", "fit_width"))
+
+        ctl = ui_cfg["controls"]
+        self.touch_mode = bool(ctl.get("touch_mode", False))
+        self.slider_width = int(ctl["slider_width"])
+        self.slider_height = int(ctl["slider_height"])
+        self.button_height = int(ctl["button_height"])
+        self.padding = int(ctl["padding"])
+        self.font_scale = float(ctl["font_scale"])
+
+        self.display_w = self.window_width
+        self.display_h = self.video_max_height
+        self._configure_pending = None
+
+    def _compute_display_size(self, native_w, native_h, max_w=None, max_h=None):
+        """Return (display_w, display_h) that fits inside the given bounds.
+
+        The returned size always keeps the native aspect ratio and never
+        exceeds the available width or height.  When no bounds are supplied,
+        the configured window width and video max height are used.
+        """
+        if native_w <= 0 or native_h <= 0:
+            return max_w or self.window_width, max_h or self.video_max_height
+
+        max_w = max_w or self.window_width
+        max_h = max_h or self.video_max_height
+        aspect = native_h / native_w
+
+        # Try to fill the available width, then clamp by height if needed.
+        display_w = max_w
+        display_h = int(round(display_w * aspect))
+        if display_h > max_h:
+            display_h = max_h
+            display_w = int(round(display_h / aspect))
+
+        display_w = max(1, min(display_w, max_w))
+        display_h = max(1, min(display_h, max_h))
+        return display_w, display_h
+
+    def _resize_for_display(self, frame, max_w=None, max_h=None):
+        """Scale a native-resolution frame to the computed display size."""
+        display_w, display_h = self._compute_display_size(
+            frame.shape[1], frame.shape[0], max_w=max_w, max_h=max_h
+        )
+        if frame.shape[1] == display_w and frame.shape[0] == display_h:
+            return frame
+        return cv2.resize(frame, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
+
+    def _on_configure(self, _event=None):
+        """Debounced handler for window resize events."""
+        if not self._window_ok or not self._running:
+            return
+        if self._configure_pending is not None:
+            self.root.after_cancel(self._configure_pending)
+        self._configure_pending = self.root.after(200, self._apply_geometry)
+
+    def _apply_geometry(self):
+        """Recompute display size and recreate sliders to fit current window."""
+        if not self._window_ok:
+            return
+        self.window_width = max(1, self.root.winfo_width())
+        self.window_height = max(1, self.root.winfo_height())
+        self._create_sliders(self.mode)
+
+    def _toggle_fullscreen(self, _event=None):
+        """Toggle fullscreen state, bound to the 'f' key for field debugging."""
+        if not self._window_ok:
+            return
+        self.fullscreen = not self.fullscreen
+        self.root.attributes("-fullscreen", self.fullscreen)
 
     def _save_cfg(self):
         with open(self.cfg_path, "w", encoding="utf-8") as f:
@@ -91,23 +194,59 @@ class CalibrationUI:
         self.max_y = max(bean_h, digit_h)
 
     def _build_ui(self):
+        # Opt-in to per-monitor DPI awareness on Windows so that window and
+        # widget dimensions map 1:1 to physical pixels on high-DPI screens.
+        try:
+            import ctypes
+
+            ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
+        except Exception:
+            pass
+
         self.root.title("Crane Vision Calibration")
         self.root.protocol("WM_DELETE_WINDOW", self._quit)
         self.root.bind("<KeyPress-1>", lambda _event: self._set_mode("bean"))
         self.root.bind("<KeyPress-2>", lambda _event: self._set_mode("digit"))
         self.root.bind("<Escape>", lambda _event: self._quit())
+        self.root.bind("<KeyPress-f>", self._toggle_fullscreen)
+        self.root.bind("<Configure>", self._on_configure)
+
+        if self.fullscreen:
+            self.root.attributes("-fullscreen", True)
+        else:
+            self.root.geometry(f"{self.window_width}x{self.window_height}")
+            self.root.minsize(640, 480)
+
+        # Use a grid so the video area expands to fill leftover space while the
+        # control panel keeps its natural height and is always visible.
+        self.root.grid_rowconfigure(0, weight=1)
+        self.root.grid_columnconfigure(0, weight=1)
 
         main_frame = tk.Frame(self.root)
-        main_frame.pack(fill=tk.BOTH, expand=True)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        main_frame.grid_rowconfigure(0, weight=1)  # video expands
+        main_frame.grid_rowconfigure(1, weight=0)  # controls fixed
+        main_frame.grid_columnconfigure(0, weight=1)
 
-        self.video_label = tk.Label(main_frame)
-        self.video_label.pack()
+        # The video container fills the top cell.  The label inside it keeps the
+        # image at its natural size and centers it; empty space shows as black.
+        video_container = tk.Frame(main_frame, bg="black")
+        video_container.grid(row=0, column=0, sticky="nsew")
+        video_container.grid_rowconfigure(0, weight=1)
+        video_container.grid_columnconfigure(0, weight=1)
+
+        self.video_label = tk.Label(video_container, bg="black")
+        self.video_label.grid(row=0, column=0)
+        self._video_container = video_container
 
         control_frame = tk.Frame(main_frame)
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
+        control_frame.grid(row=1, column=0, sticky="ew")
+        self._control_frame = control_frame
 
         mode_frame = tk.Frame(control_frame)
-        mode_frame.pack(fill=tk.X, pady=(0, 5))
+        mode_frame.pack(fill=tk.X, pady=(0, self.padding))
+
+        font = ("Helvetica", int(12 * self.font_scale))
 
         self._bean_button = tk.Button(
             mode_frame,
@@ -115,8 +254,10 @@ class CalibrationUI:
             command=lambda: self._set_mode("bean"),
             bg="#00aa00",
             fg="white",
+            font=font,
+            height=self.button_height // 20,
         )
-        self._bean_button.pack(side=tk.LEFT, padx=5)
+        self._bean_button.pack(side=tk.LEFT, padx=self.padding)
 
         self._digit_button = tk.Button(
             mode_frame,
@@ -124,24 +265,50 @@ class CalibrationUI:
             command=lambda: self._set_mode("digit"),
             bg="#555555",
             fg="white",
+            font=font,
+            height=self.button_height // 20,
         )
-        self._digit_button.pack(side=tk.LEFT, padx=5)
+        self._digit_button.pack(side=tk.LEFT, padx=self.padding)
 
         self.sliders_frame = tk.Frame(control_frame)
         self.sliders_frame.pack(fill=tk.X)
 
         self._create_sliders(self.mode)
+        self.root.update_idletasks()
 
     def _create_sliders(self, mode):
-        """Recreate sliders for the active view."""
+        """Recreate sliders for the active view, sized for the touchscreen."""
         for widget in self.sliders_frame.winfo_children():
             widget.destroy()
 
+        font = ("Helvetica", int(12 * self.font_scale))
+        # Use the video container's allocated width as the slider budget when the
+        # widget has already been drawn; otherwise fall back to the window.
+        try:
+            video_w = int(self._video_container.winfo_width())
+        except Exception:
+            video_w = 0
+        if video_w <= 1:
+            video_w = self.window_width
+
+        # Reserve horizontal space for labels and padding; keep slider usable.
+        label_width = 10 if self.touch_mode else 6
+        slider_length = max(
+            100,
+            video_w - label_width * int(8 * self.font_scale) - self.padding * 4,
+        )
+
         for _slider_name, label_text, group, key, limit_attr in SLIDER_DEFS[mode]:
             row = tk.Frame(self.sliders_frame)
-            row.pack(fill=tk.X, pady=2)
+            row.pack(fill=tk.X, pady=self.padding // 2)
 
-            tk.Label(row, text=label_text, width=20, anchor=tk.W).pack(side=tk.LEFT)
+            tk.Label(
+                row,
+                text=label_text,
+                width=label_width,
+                anchor=tk.W,
+                font=font,
+            ).pack(side=tk.LEFT, padx=(0, self.padding))
 
             max_val = getattr(self, limit_attr)
             var = tk.IntVar(master=self.root, value=self.cfg["lines"][group][key])
@@ -153,7 +320,10 @@ class CalibrationUI:
                 variable=var,
                 command=lambda value, g=group, k=key: self._set_line(g, k, int(value)),
                 showvalue=True,
-                length=400,
+                length=slider_length,
+                width=self.slider_width,
+                sliderlength=self.slider_height,
+                font=font,
             ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def _set_mode(self, mode):
@@ -240,7 +410,21 @@ class CalibrationUI:
                 self._draw_digit_lines(frame)
             self._draw_model_overlay(frame, model, error_y=30)
 
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            # All calibration logic runs on the native-resolution frame;
+            # only the displayed copy is scaled to fit the available container.
+            try:
+                avail_w = int(self._video_container.winfo_width())
+                avail_h = int(self._video_container.winfo_height())
+            except Exception:
+                avail_w, avail_h = 0, 0
+            if avail_w <= 1 or avail_h <= 1:
+                avail_w, avail_h = self.window_width, self.video_max_height
+
+            display_frame = self._resize_for_display(
+                frame, max_w=avail_w, max_h=avail_h
+            )
+
+            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(rgb)
             imgtk = ImageTk.PhotoImage(image=pil_image)
             self.video_label.imgtk = imgtk

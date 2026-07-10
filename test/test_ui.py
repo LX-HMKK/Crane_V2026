@@ -315,3 +315,118 @@ def test_run_calibration_uses_empty_frame_when_camera_missing(
 
     assert mock_ui_class.called
     mock_ui_class.return_value.run.assert_called_once()
+
+
+def _write_cfg_with_ui(tmp_path, ui_cfg=None):
+    cfg_path = tmp_path / "vision.yaml"
+    cfg = {
+        "lines": {
+            "bean": {"left_x": 100, "right_x": 300},
+            "digit": {"x1": 100, "x2": 200, "x3": 300, "x4": 400},
+        },
+        "inference": {"imgsz": 640},
+    }
+    if ui_cfg:
+        cfg["ui"] = ui_cfg
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f)
+    return cfg_path
+
+
+def test_ui_uses_default_config_when_ui_section_missing(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
+    assert ui.window_width == 1024
+    assert ui.window_height == 600
+    assert ui.fullscreen is False
+    assert ui.touch_mode is False
+
+
+def test_fullscreen_enabled_when_configured(tmp_path):
+    cfg_path = _write_cfg_with_ui(tmp_path, {"window": {"fullscreen": True}})
+    root = MagicMock()
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock(), root=root)
+    root.attributes.assert_called_once_with("-fullscreen", True)
+
+
+def test_display_size_respects_max_height(tmp_path):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path,
+        {"window": {"width": 1024, "height": 600}, "video": {"max_height": 420}},
+    )
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    display_w, display_h = ui._compute_display_size(1280, 720)
+    # 1280x720 contained in 1024x420 should scale to 747x420 (keeps aspect ratio).
+    assert display_w == 747
+    assert display_h == 420
+
+
+def test_display_size_preserves_aspect_ratio(tmp_path):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path,
+        {"window": {"width": 1024, "height": 600}, "video": {"max_height": 600}},
+    )
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    display_w, display_h = ui._compute_display_size(1280, 720)
+    # 1280x720 scaled to width 1024 should be 1024x576.
+    assert display_w == 1024
+    assert display_h == 576
+
+
+def test_slider_to_uses_native_camera_width(tmp_path, monkeypatch):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path,
+        {"window": {"width": 1024, "height": 600}, "controls": {"touch_mode": True}},
+    )
+    created = []
+
+    def mock_scale(*args, **kwargs):
+        created.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    cam_bean = MagicMock()
+    cam_bean.width = 1280
+    cam_bean.height = 720
+    cam_digit = MagicMock()
+    cam_digit.width = 1280
+    cam_digit.height = 720
+
+    ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
+    assert len(created) == 2
+    for kwargs in created:
+        assert kwargs["to"] == 1280
+
+
+def test_lines_drawn_before_display_resize(tmp_path, monkeypatch):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path,
+        {"window": {"width": 1024, "height": 600}, "video": {"max_height": 420}},
+    )
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+
+    draw_calls = []
+    original_draw_bean = ui._draw_bean_lines
+    original_resize = ui._resize_for_display
+
+    def tracking_draw_bean(frame):
+        draw_calls.append("draw_bean_lines")
+        original_draw_bean(frame)
+
+    def tracking_resize(frame):
+        draw_calls.append("resize_for_display")
+        return original_resize(frame)
+
+    monkeypatch.setattr(ui, "_draw_bean_lines", tracking_draw_bean)
+    monkeypatch.setattr(ui, "_resize_for_display", tracking_resize)
+
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    ui._draw_bean_lines(frame)
+    _ = ui._resize_for_display(frame)
+
+    assert draw_calls == ["draw_bean_lines", "resize_for_display"]
+    # Make sure the resized output is smaller than native.
+    resized = ui._resize_for_display(frame)
+    assert resized.shape[0] <= 420

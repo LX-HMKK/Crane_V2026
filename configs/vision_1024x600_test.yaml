@@ -1,0 +1,62 @@
+serial:
+  port: /dev/ttyS1
+  baudrate: 115200
+  timeout: 0.05
+cameras:
+  bean:
+    device: 0
+    width: 1280
+    height: 720
+    buffer_size: 1
+  digit:
+    device: 2
+    width: 1280
+    height: 720
+    buffer_size: 1
+models:
+  bean:
+    bin: assets/beans_v4.bin
+    cfg: assets/beans_v4_rdkx5_config.yaml
+    pt: assets/beans_v4.pt
+  digit:
+    bin: assets/num.bin
+    cfg: assets/num_rdkx5_config.yaml
+    pt: assets/num.pt
+inference:
+  imgsz: 640
+  conf_thres: 0.25
+  iou_thres: 0.45
+  pad: 127
+ui:
+  window:
+    fullscreen: false
+    width: 1024
+    height: 600
+  video:
+    max_height: 420
+    fit_mode: contain
+  controls:
+    touch_mode: true
+    slider_width: 30
+    slider_height: 30
+    button_height: 40
+    padding: 6
+    font_scale: 1.1
+scan:
+  frames: 5
+  max_retries: 2
+  timeout_sec: 30
+lines:
+  bean:
+    left_x: 515
+    right_x: 780
+  digit:
+    x1: 251
+    x2: 515
+    x3: 764
+    x4: 1046
+mapping:
+  bean_to_digit:
+    yellow: 1
+    green: 2
+    white: 3
