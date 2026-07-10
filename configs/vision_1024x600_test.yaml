@@ -37,11 +37,11 @@ ui:
     fit_mode: contain
   controls:
     touch_mode: true
-    slider_width: 15
-    slider_height: 15
+    slider_width: 10
+    slider_height: 10
     button_height: 20
-    padding: 3
-    font_scale: 0.9
+    padding: 1
+    font_scale: 0.8
 scan:
   frames: 5
   max_retries: 2
@@ -49,7 +49,7 @@ scan:
 lines:
   bean:
     left_x: 515
-    right_x: 780
+    right_x: 837
   digit:
     x1: 251
     x2: 515

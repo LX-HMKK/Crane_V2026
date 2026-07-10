@@ -32,11 +32,11 @@ DEFAULT_UI_CFG = {
     "video": {"max_height": 420, "fit_mode": "contain"},
     "controls": {
         "touch_mode": False,
-        "slider_width": 10,
-        "slider_height": 10,
-        "button_height": 18,
-        "padding": 3,
-        "font_scale": 0.9,
+        "slider_width": 8,
+        "slider_height": 8,
+        "button_height": 16,
+        "padding": 1,
+        "font_scale": 0.8,
     },
 }
 
@@ -244,7 +244,7 @@ class CalibrationUI:
         self._control_frame = control_frame
 
         mode_frame = tk.Frame(control_frame)
-        mode_frame.pack(fill=tk.X, pady=(0, self.padding))
+        mode_frame.pack(fill=tk.X, pady=(0, 1))
 
         font = ("Helvetica", int(12 * self.font_scale))
 
@@ -257,7 +257,7 @@ class CalibrationUI:
             font=font,
             height=self.button_height // 20,
         )
-        self._bean_button.pack(side=tk.LEFT, padx=self.padding)
+        self._bean_button.pack(side=tk.LEFT, padx=1)
 
         self._digit_button = tk.Button(
             mode_frame,
@@ -268,7 +268,7 @@ class CalibrationUI:
             font=font,
             height=self.button_height // 20,
         )
-        self._digit_button.pack(side=tk.LEFT, padx=self.padding)
+        self._digit_button.pack(side=tk.LEFT, padx=1)
 
         self.sliders_frame = tk.Frame(control_frame)
         self.sliders_frame.pack(fill=tk.X)
@@ -300,7 +300,7 @@ class CalibrationUI:
 
         for _slider_name, label_text, group, key, limit_attr in SLIDER_DEFS[mode]:
             row = tk.Frame(self.sliders_frame)
-            row.pack(fill=tk.X, pady=self.padding // 2)
+            row.pack(fill=tk.X, pady=0)
 
             tk.Label(
                 row,
@@ -308,7 +308,7 @@ class CalibrationUI:
                 width=label_width,
                 anchor=tk.W,
                 font=font,
-            ).pack(side=tk.LEFT, padx=(0, self.padding))
+            ).pack(side=tk.LEFT, padx=(0, 1))
 
             max_val = getattr(self, limit_attr)
             var = tk.IntVar(master=self.root, value=self.cfg["lines"][group][key])
@@ -321,10 +321,13 @@ class CalibrationUI:
                 command=lambda value, g=group, k=key: self._set_line(g, k, int(value)),
                 showvalue=True,
                 length=slider_length,
-                width=self.slider_width,
-                sliderlength=self.slider_height,
+                width=max(6, self.slider_width),
+                sliderlength=max(8, self.slider_height),
                 font=font,
-            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+                bd=0,
+                highlightthickness=0,
+                troughcolor="#cccccc",
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True, pady=0)
 
     def _set_mode(self, mode):
         if mode == self.mode:
