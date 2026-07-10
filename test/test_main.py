@@ -128,7 +128,7 @@ def _minimal_vision_cfg():
         "scan": {"frames": 1, "max_retries": 0, "timeout_sec": 5},
         "lines": {
             "bean": {"left_x": 213, "right_x": 426},
-            "digit": {"horizontal_y": 240, "left_x": 213, "right_x": 426},
+            "digit": {"x1": 150, "x2": 250, "x3": 350, "x4": 450},
         },
         "mapping": {"bean_to_digit": {"yellow": 1, "green": 2, "white": 3}},
     }
@@ -155,8 +155,8 @@ def test_main_amd64_once_success(capsys, monkeypatch):
         digit.names = {0: "1", 1: "2", 2: "3", 3: "4", 4: "5"}
         digit.predict.return_value = [
             [95.0, 95.0, 105.0, 105.0, 0.9, 1],   # zone 4, value 2
-            [95.0, 300.0, 105.0, 310.0, 0.9, 0],  # zone 5, value 1
-            [300.0, 300.0, 310.0, 310.0, 0.9, 2], # zone 6, value 3
+            [195.0, 95.0, 205.0, 105.0, 0.9, 0],  # zone 5, value 1
+            [300.0, 95.0, 310.0, 105.0, 0.9, 2],  # zone 6, value 3
         ]
         return bean, digit
 
@@ -191,9 +191,9 @@ def test_main_arm64_competition_sends_task(monkeypatch):
         digit = MagicMock()
         digit.names = {0: "1", 1: "2", 2: "3", 3: "4", 4: "5"}
         digit.predict.return_value = [
-            [95.0, 95.0, 105.0, 105.0, 0.9, 1],
-            [95.0, 300.0, 105.0, 310.0, 0.9, 0],
-            [300.0, 300.0, 310.0, 310.0, 0.9, 2],
+            [95.0, 95.0, 105.0, 105.0, 0.9, 1],   # zone 4, value 2
+            [195.0, 95.0, 205.0, 105.0, 0.9, 0],  # zone 5, value 1
+            [300.0, 95.0, 310.0, 105.0, 0.9, 2],  # zone 6, value 3
         ]
         return bean, digit
 

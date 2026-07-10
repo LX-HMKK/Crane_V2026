@@ -5,7 +5,7 @@ class TaskGenerator:
     """Convert bean/digit detections into three placement-zone numbers."""
 
     _BEAN_KEYS = ("left_x", "right_x")
-    _DIGIT_KEYS = ("horizontal_y", "left_x", "right_x")
+    _DIGIT_KEYS = ("x1", "x2", "x3", "x4")
 
     def __init__(self, mapping, lines, bean_names, digit_names):
         self.mapping = mapping
@@ -36,8 +36,9 @@ class TaskGenerator:
             return "digit line coordinates must be non-negative"
         if bean["left_x"] >= bean["right_x"]:
             return "bean left_x must be less than right_x"
-        if digit["left_x"] >= digit["right_x"]:
-            return "digit left_x must be less than right_x"
+        xs = [digit[k] for k in self._DIGIT_KEYS]
+        if not all(xs[i] < xs[i + 1] for i in range(len(xs) - 1)):
+            return "digit x1..x4 must be strictly increasing"
         return None
 
     @staticmethod
@@ -58,20 +59,17 @@ class TaskGenerator:
         return 3
 
     def _digit_zone(self, cx, cy):
-        d = self.lines["digit"]
-        horizontal_y = d["horizontal_y"]
-        left_x = d["left_x"]
-        right_x = d["right_x"]
-        midpoint = (left_x + right_x) / 2
-
-        if cy < horizontal_y:
-            # Strict < on midpoint: detections exactly on midpoint go to zone 8.
-            return 4 if cx < midpoint else 8
-        if cx < left_x:
+        # 5 placement baskets arranged left-to-right; partition by x only.
+        xs = [self.lines["digit"][k] for k in self._DIGIT_KEYS]
+        if cx < xs[0]:
+            return 4
+        if cx < xs[1]:
             return 5
-        if cx < right_x:
+        if cx < xs[2]:
             return 6
-        return 7
+        if cx < xs[3]:
+            return 7
+        return 8
 
     def _center(self, det):
         x1, y1, x2, y2 = det[:4]

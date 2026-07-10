@@ -8,9 +8,10 @@ from PIL import Image, ImageTk
 LINE_COLORS = {
     "bean_left_x": (0, 255, 0),
     "bean_right_x": (0, 255, 0),
-    "digit_horizontal_y": (255, 0, 0),
-    "digit_left_x": (255, 0, 0),
-    "digit_right_x": (255, 0, 0),
+    "digit_x1": (255, 0, 0),
+    "digit_x2": (255, 0, 0),
+    "digit_x3": (255, 0, 0),
+    "digit_x4": (255, 0, 0),
 }
 
 SLIDER_DEFS = {
@@ -19,9 +20,10 @@ SLIDER_DEFS = {
         ("bean_right_x", "Bean right x", "bean", "right_x", "max_x"),
     ],
     "digit": [
-        ("digit_h_y", "Digit horizontal y", "digit", "horizontal_y", "max_y"),
-        ("digit_left_x", "Digit left x", "digit", "left_x", "max_x"),
-        ("digit_right_x", "Digit right x", "digit", "right_x", "max_x"),
+        ("digit_x1", "Digit x1", "digit", "x1", "max_x"),
+        ("digit_x2", "Digit x2", "digit", "x2", "max_x"),
+        ("digit_x3", "Digit x3", "digit", "x3", "max_x"),
+        ("digit_x4", "Digit x4", "digit", "x4", "max_x"),
     ],
 }
 
@@ -181,13 +183,10 @@ class CalibrationUI:
         cv2.line(frame, (right, 0), (right, h), LINE_COLORS["bean_right_x"], 2)
 
     def _draw_digit_lines(self, frame):
-        h, w = frame.shape[:2]
-        hy = self.cfg["lines"]["digit"]["horizontal_y"]
-        left = self.cfg["lines"]["digit"]["left_x"]
-        right = self.cfg["lines"]["digit"]["right_x"]
-        cv2.line(frame, (0, hy), (w, hy), LINE_COLORS["digit_horizontal_y"], 2)
-        cv2.line(frame, (left, 0), (left, h), LINE_COLORS["digit_left_x"], 2)
-        cv2.line(frame, (right, 0), (right, h), LINE_COLORS["digit_right_x"], 2)
+        h = frame.shape[0]
+        for key in ("x1", "x2", "x3", "x4"):
+            x = self.cfg["lines"]["digit"][key]
+            cv2.line(frame, (x, 0), (x, h), LINE_COLORS[f"digit_{key}"], 2)
 
     @staticmethod
     def _class_name(names, cls_id):

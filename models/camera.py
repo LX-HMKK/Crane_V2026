@@ -77,3 +77,30 @@ class MockCamera:
 
     def release(self):
         pass
+
+
+class StaticImageCamera:
+    """Camera that repeatedly returns a fixed image file.
+
+    Useful for x86 offline tests with captured frames. The image is resized to
+    the configured width/height on first capture.
+    """
+
+    def __init__(self, image_path, width, height):
+        self.image_path = image_path
+        self.width = int(width)
+        self.height = int(height)
+        self._frame = None
+
+    def capture(self):
+        if self._frame is None:
+            frame = cv2.imread(str(self.image_path))
+            if frame is None:
+                raise RuntimeError(f"Cannot load image {self.image_path}")
+            if (frame.shape[1], frame.shape[0]) != (self.width, self.height):
+                frame = cv2.resize(frame, (self.width, self.height))
+            self._frame = frame
+        return True, self._frame.copy()
+
+    def release(self):
+        self._frame = None

@@ -33,12 +33,13 @@ scan:
   timeout_sec: 30
 lines:
   bean:
-    left_x: 439
-    right_x: 720
+    left_x: 502
+    right_x: 779
   digit:
-    horizontal_y: 398
-    left_x: 514
-    right_x: 728
+    x1: 227
+    x2: 495
+    x3: 757
+    x4: 1043
 mapping:
   bean_to_digit:
     yellow: 1

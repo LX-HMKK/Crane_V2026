@@ -10,11 +10,11 @@ from models.task_generator import TaskGenerator
 def digit_det(zone, digit, conf=0.9):
     """Helper: [x1, y1, x2, y2, conf, cls_id]; names map cls_id -> digit value."""
     centers = {
-        4: (100, 100),  # top-left
-        5: (100, 300),  # bottom-left
-        6: (300, 300),  # bottom-middle
-        7: (500, 300),  # bottom-right
-        8: (500, 100),  # top-right
+        4: (100, 100),  # leftmost
+        5: (200, 100),  # second from left
+        6: (300, 100),  # middle
+        7: (400, 100),  # second from right
+        8: (500, 100),  # rightmost
     }
     cx, cy = centers[zone]
     return [cx - 5.0, cy - 5.0, cx + 5.0, cy + 5.0, conf, digit - 1]
@@ -29,7 +29,7 @@ def bean_det(zone, cls_id, conf=0.9):
 def make_lines():
     return {
         "bean": {"left_x": 213, "right_x": 426},
-        "digit": {"horizontal_y": 240, "left_x": 213, "right_x": 426},
+        "digit": {"x1": 150, "x2": 250, "x3": 350, "x4": 450},
     }
 
 
@@ -139,12 +139,12 @@ def test_generate_task_boundary_lines():
         [210.0, 0.0, 216.0, 10.0, 0.9, 1],   # cx center 213, zone 2, green -> 2
         [423.0, 0.0, 429.0, 10.0, 0.9, 0],   # cx center 426, zone 3, white -> 3
     ]
-    # Digit cy == horizontal_y (240) falls to bottom row;
-    # cx == left_x (213) in bottom row falls into zone 6.
+    # Digit cx == x1 (150) falls into zone 5;
+    # cx == x2 (250) falls into zone 6.
     digit_dets = [
         [95.0, 95.0, 105.0, 105.0, 0.9, 0],     # zone 4, value 1
-        [95.0, 240.0, 105.0, 250.0, 0.9, 1],    # zone 5, value 2
-        [210.0, 240.0, 216.0, 250.0, 0.9, 2],   # zone 6, value 3
+        [150.0, 95.0, 156.0, 105.0, 0.9, 1],    # zone 5, value 2 (on x1)
+        [250.0, 95.0, 256.0, 105.0, 0.9, 2],    # zone 6, value 3 (on x2)
     ]
     gen = make_gen()
     result, reason = gen.generate(bean_dets, digit_dets)
@@ -174,7 +174,7 @@ def test_generate_task_reversed_bean_lines():
 def test_generate_task_negative_line_coordinate():
     mapping, bean_names, digit_names = make_names()
     lines = make_lines()
-    lines["digit"]["left_x"] = -10
+    lines["digit"]["x1"] = -10
     gen = TaskGenerator(mapping, lines, bean_names, digit_names)
     result, reason = gen.generate([], [])
     assert result is None
@@ -185,7 +185,7 @@ def test_generate_task_malformed_digit_lines():
     mapping, bean_names, digit_names = make_names()
     gen = TaskGenerator(
         mapping,
-        {"bean": {"left_x": 213, "right_x": 426}, "digit": {"left_x": 213}},
+        {"bean": {"left_x": 213, "right_x": 426}, "digit": {"x1": 213}},
         bean_names,
         digit_names,
     )
@@ -206,7 +206,7 @@ def test_generate_task_unknown_digit_class():
     digit_dets = [
         digit_det(4, 1),
         # Unknown class placed alone in zone 5 so it is selected and reported.
-        [95.0, 300.0, 105.0, 310.0, 0.9, 99],
+        [195.0, 95.0, 205.0, 105.0, 0.9, 99],
         digit_det(6, 3),
     ]
     gen = make_gen()

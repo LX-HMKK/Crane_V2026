@@ -20,7 +20,7 @@ def _write_cfg(tmp_path, values=None):
     cfg = {
         "lines": {
             "bean": {"left_x": 100, "right_x": 300},
-            "digit": {"horizontal_y": 200, "left_x": 100, "right_x": 300},
+            "digit": {"x1": 100, "x2": 200, "x3": 300, "x4": 400},
         },
         "inference": {"imgsz": 640},
     }
@@ -36,7 +36,7 @@ def _write_full_cfg(tmp_path):
     cfg = {
         "lines": {
             "bean": {"left_x": 100, "right_x": 300},
-            "digit": {"horizontal_y": 200, "left_x": 100, "right_x": 300},
+            "digit": {"x1": 100, "x2": 200, "x3": 300, "x4": 400},
         },
         "inference": {"imgsz": 640, "conf_thres": 0.25, "iou_thres": 0.45},
         "cameras": {
@@ -84,12 +84,12 @@ def test_ui_saves_lines_on_change(tmp_path):
     cam_digit = MagicMock()
     ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
     ui._set_line("bean", "left_x", 150)
-    ui._set_line("digit", "horizontal_y", 250)
+    ui._set_line("digit", "x1", 250)
 
     with open(cfg_path, "r") as f:
         saved = yaml.safe_load(f)
     assert saved["lines"]["bean"]["left_x"] == 150
-    assert saved["lines"]["digit"]["horizontal_y"] == 250
+    assert saved["lines"]["digit"]["x1"] == 250
 
 
 def test_draw_bean_lines_smoke(tmp_path):
@@ -211,7 +211,7 @@ def test_switching_mode_recreates_correct_trackbars(tmp_path, monkeypatch):
 
     ui._set_mode("digit")
     assert ui.mode == "digit"
-    assert len(created) == 3
+    assert len(created) == 4
 
     created.clear()
     ui._set_mode("bean")

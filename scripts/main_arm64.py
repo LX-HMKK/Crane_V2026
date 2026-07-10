@@ -11,6 +11,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+from models.camera import StaticImageCamera
 from models.runtime import (
     ROOT as RUNTIME_ROOT,
     create_task_generator,
@@ -27,13 +28,27 @@ from models.serial_port import SerialPort
 from models.ui import CalibrationUI
 
 
-def run_calibration(cfg, cfg_path, mock=False):
-    cam_bean = open_camera(
-        cfg["cameras"]["bean"], mock=mock, fallback_empty=True
+def _open_image_camera(image_path, camera_cfg):
+    """Open a StaticImageCamera for offline file-based testing."""
+    return StaticImageCamera(
+        image_path, camera_cfg["width"], camera_cfg["height"]
     )
-    cam_digit = open_camera(
-        cfg["cameras"]["digit"], mock=mock, fallback_empty=True
-    )
+
+
+def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None):
+    if bean_image is not None:
+        cam_bean = _open_image_camera(bean_image, cfg["cameras"]["bean"])
+    else:
+        cam_bean = open_camera(
+            cfg["cameras"]["bean"], mock=mock, fallback_empty=True
+        )
+
+    if digit_image is not None:
+        cam_digit = _open_image_camera(digit_image, cfg["cameras"]["digit"])
+    else:
+        cam_digit = open_camera(
+            cfg["cameras"]["digit"], mock=mock, fallback_empty=True
+        )
 
     try:
         bean_model = None
@@ -152,6 +167,14 @@ def main():
         action="store_true",
         help="Use synthetic cameras for UI testing",
     )
+    parser.add_argument(
+        "--bean-image",
+        help="Path to a static bean camera image (overrides real/mock camera)",
+    )
+    parser.add_argument(
+        "--digit-image",
+        help="Path to a static digit camera image (overrides real/mock camera)",
+    )
     args = parser.parse_args()
 
     init_logging()
@@ -165,7 +188,13 @@ def main():
     if args.no_ui:
         run_competition(cfg)
     else:
-        run_calibration(cfg, args.config, mock=args.mock_cameras)
+        run_calibration(
+            cfg,
+            args.config,
+            mock=args.mock_cameras,
+            bean_image=args.bean_image,
+            digit_image=args.digit_image,
+        )
 
 
 if __name__ == "__main__":

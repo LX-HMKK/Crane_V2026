@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Crane vision x86 test entry point (AMD64).
 
-This entry point exercises the full vision pipeline on a development host:
-camera capture -> model inference -> task generation -> result output.
-It does not use serial communication; scanning is triggered by a key press
-and the result is printed to the console.
+This entry point mirrors scripts/main_arm64.py but uses PyTorch `.pt` models
+and no serial port. It is intended for development-host testing of the same
+calibration UI and single-shot scan logic that runs on the RDK X5.
 """
 
 import argparse
@@ -18,6 +17,7 @@ import cv2
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
+from models.camera import StaticImageCamera
 from models.runtime import (
     ROOT as RUNTIME_ROOT,
     create_task_generator,
@@ -30,64 +30,71 @@ from models.runtime import (
     scan_once,
     warmup_models,
 )
+from models.ui import CalibrationUI
 
 
-def _trigger_scan(cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg):
-    """Run one scan and print the result to the console."""
-    result, reason = scan_once(
-        cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
+def _open_image_camera(image_path, camera_cfg):
+    """Open a StaticImageCamera for offline file-based testing."""
+    return StaticImageCamera(
+        image_path, camera_cfg["width"], camera_cfg["height"]
     )
-    if result is None:
-        logging.error("Scan failed: %s", reason)
-        print(f"SCAN FAILED: {reason}")
+
+
+def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None):
+    if bean_image is not None:
+        cam_bean = _open_image_camera(bean_image, cfg["cameras"]["bean"])
     else:
-        p1, p2, p3 = result
-        logging.info("SCAN RESULT: %d %d %d", p1, p2, p3)
-        print(f"SCAN RESULT: {p1} {p2} {p3}")
-    return result, reason
+        cam_bean = open_camera(
+            cfg["cameras"]["bean"], mock=mock, fallback_empty=True
+        )
 
-
-def _run_preview_loop(
-    cfg, cam_bean, cam_digit, bean_model, digit_model, task_gen, once=False
-):
-    """Show live preview windows and trigger scans on key press."""
-    cv2.namedWindow("bean", cv2.WINDOW_NORMAL)
-    cv2.namedWindow("digit", cv2.WINDOW_NORMAL)
-
-    print("Press SPACE or 's' to scan, ESC to quit")
+    if digit_image is not None:
+        cam_digit = _open_image_camera(digit_image, cfg["cameras"]["digit"])
+    else:
+        cam_digit = open_camera(
+            cfg["cameras"]["digit"], mock=mock, fallback_empty=True
+        )
 
     try:
-        while True:
-            ok_b, frame_b = cam_bean.capture()
-            ok_d, frame_d = cam_digit.capture()
-            if ok_b:
-                cv2.imshow("bean", frame_b)
-            if ok_d:
-                cv2.imshow("digit", frame_d)
+        bean_model = None
+        digit_model = None
+        try:
+            bean_model, digit_model = load_pt_models(cfg)
+        except EnvironmentError:
+            logging.warning(
+                "PyTorch models not available; running UI in camera-only mode"
+            )
 
-            key = cv2.waitKey(30) & 0xFF
-            if key == 27:  # ESC
-                break
-            if key in (ord(" "), ord("s")):
-                _trigger_scan(
-                    cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
-                )
-                if once:
-                    break
+        ui = CalibrationUI(
+            cfg_path,
+            cam_bean,
+            cam_digit,
+            bean_model,
+            digit_model,
+        )
+        ui.run()
     finally:
-        cv2.destroyAllWindows()
+        release_cameras(cam_bean, cam_digit)
 
 
-def run_amd64_test(cfg, mock_cameras=False, once=False):
+def run_once(cfg, mock=False, bean_image=None, digit_image=None):
+    """Run a single scan and print the result, without opening the UI."""
     init_logging()
-    logging.info("Starting crane vision test loop (AMD64)")
+    logging.info("Starting crane vision single-scan test (AMD64)")
 
-    cam_bean = open_camera(
-        cfg["cameras"]["bean"], mock=mock_cameras, fallback_empty=True
-    )
-    cam_digit = open_camera(
-        cfg["cameras"]["digit"], mock=mock_cameras, fallback_empty=True
-    )
+    if bean_image is not None:
+        cam_bean = _open_image_camera(bean_image, cfg["cameras"]["bean"])
+    else:
+        cam_bean = open_camera(
+            cfg["cameras"]["bean"], mock=mock, fallback_empty=True
+        )
+
+    if digit_image is not None:
+        cam_digit = _open_image_camera(digit_image, cfg["cameras"]["digit"])
+    else:
+        cam_digit = open_camera(
+            cfg["cameras"]["digit"], mock=mock, fallback_empty=True
+        )
 
     try:
         bean_model = None
@@ -96,7 +103,7 @@ def run_amd64_test(cfg, mock_cameras=False, once=False):
             bean_model, digit_model = load_pt_models(cfg)
         except EnvironmentError as exc:
             logging.warning(
-                "PyTorch models not available: %s; running test in camera-only mode",
+                "PyTorch models not available: %s; running scan in camera-only mode",
                 exc,
             )
 
@@ -105,14 +112,17 @@ def run_amd64_test(cfg, mock_cameras=False, once=False):
         if bean_model is not None and digit_model is not None:
             warmup_models(cam_bean, cam_digit, bean_model, digit_model)
 
-        if once:
-            _trigger_scan(
-                cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
-            )
+        result, reason = scan_once(
+            cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg
+        )
+        if result is None:
+            logging.error("Scan failed: %s", reason)
+            print(f"SCAN FAILED: {reason}")
         else:
-            _run_preview_loop(
-                cfg, cam_bean, cam_digit, bean_model, digit_model, task_gen
-            )
+            p1, p2, p3 = result
+            logging.info("SCAN RESULT: %d %d %d", p1, p2, p3)
+            print(f"SCAN RESULT: {p1} {p2} {p3}")
+        return result, reason
     finally:
         release_cameras(cam_bean, cam_digit)
 
@@ -126,18 +136,34 @@ def main():
         default=str(RUNTIME_ROOT / "configs" / "vision.yaml"),
         help="Path to vision.yaml",
     )
+
+    ui_group = parser.add_mutually_exclusive_group()
+    ui_group.add_argument(
+        "--ui",
+        action="store_true",
+        help="Run calibration UI (default behavior, backward-compatible alias)",
+    )
+    ui_group.add_argument(
+        "--once",
+        action="store_true",
+        help="Run a single scan without opening the UI",
+    )
+
     parser.add_argument(
         "--list-cameras", action="store_true", help="List available cameras"
     )
     parser.add_argument(
         "--mock-cameras",
         action="store_true",
-        help="Use synthetic cameras for testing",
+        help="Use synthetic cameras for UI testing",
     )
     parser.add_argument(
-        "--once",
-        action="store_true",
-        help="Run one scan immediately and exit (no preview window)",
+        "--bean-image",
+        help="Path to a static bean camera image (overrides real/mock camera)",
+    )
+    parser.add_argument(
+        "--digit-image",
+        help="Path to a static digit camera image (overrides real/mock camera)",
     )
     args = parser.parse_args()
 
@@ -148,7 +174,22 @@ def main():
         return
 
     cfg = load_vision_cfg(args.config)
-    run_amd64_test(cfg, mock_cameras=args.mock_cameras, once=args.once)
+
+    if args.once:
+        run_once(
+            cfg,
+            mock=args.mock_cameras,
+            bean_image=args.bean_image,
+            digit_image=args.digit_image,
+        )
+    else:
+        run_calibration(
+            cfg,
+            args.config,
+            mock=args.mock_cameras,
+            bean_image=args.bean_image,
+            digit_image=args.digit_image,
+        )
 
 
 if __name__ == "__main__":
