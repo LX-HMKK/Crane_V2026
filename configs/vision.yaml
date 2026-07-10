@@ -37,11 +37,11 @@ ui:
     fit_mode: contain
   controls:
     touch_mode: true
-    slider_width: 30
-    slider_height: 30
-    button_height: 40
-    padding: 6
-    font_scale: 1.1
+    slider_width: 15
+    slider_height: 15
+    button_height: 20
+    padding: 3
+    font_scale: 0.9
 scan:
   frames: 5
   max_retries: 2

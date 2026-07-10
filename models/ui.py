@@ -32,11 +32,11 @@ DEFAULT_UI_CFG = {
     "video": {"max_height": 420, "fit_mode": "contain"},
     "controls": {
         "touch_mode": False,
-        "slider_width": 15,
-        "slider_height": 20,
-        "button_height": 30,
-        "padding": 5,
-        "font_scale": 1.0,
+        "slider_width": 10,
+        "slider_height": 10,
+        "button_height": 18,
+        "padding": 3,
+        "font_scale": 0.9,
     },
 }
 
