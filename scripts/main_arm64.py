@@ -24,7 +24,7 @@ from models.runtime import (
     scan_once,
     warmup_models,
 )
-from models.serial_port import SerialPort
+from models.serial_port import SerialPort, open_serial_port
 from models.ui import CalibrationUI
 
 
@@ -71,8 +71,6 @@ def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None
 
 
 def run_competition(cfg):
-    import serial
-
     init_logging()
     logging.info("Starting crane vision in competition mode (ARM64)")
 
@@ -87,12 +85,10 @@ def run_competition(cfg):
         warmup_models(cam_bean, cam_digit, bean_model, digit_model)
         logging.info("Ready. Waiting for START frame...")
 
-        port = SerialPort(
-            serial.Serial(
-                cfg["serial"]["port"],
-                cfg["serial"]["baudrate"],
-                timeout=cfg["serial"]["timeout"],
-            )
+        port = open_serial_port(
+            cfg["serial"]["port"],
+            cfg["serial"]["baudrate"],
+            timeout=cfg["serial"]["timeout"],
         )
 
         try:

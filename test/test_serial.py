@@ -1,13 +1,18 @@
 import sys
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+# Keep this module independent of the heavy inference dependencies.
+sys.modules["ultralytics"] = None
+sys.modules["torch"] = None
 
 import pytest
 import serial
 import time
 import threading
-from models.serial_port import SerialPort, START_FRAME
+from models.serial_port import SerialPort, START_FRAME, open_serial_port
 
 
 def test_wait_start_detects_start_frame():
@@ -90,3 +95,20 @@ def test_send_task_rejects_invalid_payload():
     with pytest.raises(ValueError):
         port.send_task(5, 300, 4)
     port.close()
+
+
+def test_open_serial_port_uses_eight_n_one():
+    fake_ser = mock.Mock(spec=serial.Serial)
+    with mock.patch("serial.Serial", return_value=fake_ser) as mock_serial:
+        port = open_serial_port("/dev/ttyS1", 115200, timeout=0.05)
+
+    mock_serial.assert_called_once_with(
+        "/dev/ttyS1",
+        115200,
+        bytesize=serial.EIGHTBITS,
+        parity=serial.PARITY_NONE,
+        stopbits=serial.STOPBITS_ONE,
+        timeout=0.05,
+    )
+    assert isinstance(port, SerialPort)
+    assert port.ser is fake_ser

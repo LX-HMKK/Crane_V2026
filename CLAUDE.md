@@ -233,6 +233,21 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
 
+## 串口
+
+RDK X5 通过 40PIN 物理引脚 8/10 与下位机通信：
+
+| 物理引脚 | 功能 | 设备节点 |
+|---|---|---|
+| 8 | UART1_TXD | `/dev/ttyS1` |
+| 10 | UART1_RXD | `/dev/ttyS1` |
+
+- 默认配置为 **115200 8/N/1**，IO 电压 3.3V。
+- `/dev/ttyS0` 是系统调试串口，不建议用于下位机通信。
+- 与下位机连接需要交叉接线：RDK TX（引脚 8）→ 下位机 RX，RDK RX（引脚 10）→ 下位机 TX，GND → GND。
+
+`scripts/main_arm64.py` 通过 `models/serial_port.open_serial_port()` 打开串口，参数来自 `configs/vision.yaml` 的 `serial` 段。`models/serial_port.py` 同时封装了 START 帧匹配（`AA 55 01 0D 0A`）和 TASK 帧发送（`BB 66 p1 p2 p3 1B 1A`）。
+
 ## 提交代码
 
 提交信息按 Angular 规范写中文主题。在 PowerShell 中，避免把 `@` 解析成数组，使用 here-string 写入临时文件再提交：
@@ -261,3 +276,5 @@ Remove-Item .git-msg
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
+- `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。
+- 在 x86 开发机上运行 `pytest test/` 时，测试模块会在顶部阻止 `ultralytics`/`torch` 导入，防止 pytest 收集阶段加载 PyTorch/CUDA 上下文导致内存暴涨。不要在测试文件顶部删除这些 `sys.modules[...] = None` 语句。

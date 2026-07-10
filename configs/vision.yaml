@@ -1,5 +1,7 @@
 serial:
-  port: /dev/ttyUSB0
+  # RDK X5 40PIN 物理引脚 8/10 默认对应 /dev/ttyS1（UART1），3.3V。
+  # /dev/ttyS0 为系统调试串口，不建议用于下位机通信。
+  port: /dev/ttyS1
   baudrate: 115200
   timeout: 0.05
 cameras:

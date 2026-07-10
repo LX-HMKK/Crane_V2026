@@ -9,6 +9,27 @@ TASK_HEAD = bytes([0xBB, 0x66])
 TASK_TAIL = bytes([0x1B, 0x1A])
 
 
+def open_serial_port(port, baudrate, timeout=0.05, **kwargs):
+    """Open a pyserial handle and wrap it in SerialPort.
+
+    Defaults to 8/N/1 with no software/hardware flow control.
+    Extra keyword arguments are forwarded to serial.Serial.
+    """
+    import serial
+
+    return SerialPort(
+        serial.Serial(
+            port,
+            baudrate,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            timeout=timeout,
+            **kwargs,
+        )
+    )
+
+
 class SerialPort:
     """Handle START frame reception and TASK frame transmission."""
 

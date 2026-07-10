@@ -5,6 +5,12 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
 
+# Block heavy optional dependencies so that importing the entry points does not
+# pull in Ultralytics/torch (and possibly initialize a CUDA context) during
+# pytest collection. The tests themselves mock model loading.
+sys.modules["ultralytics"] = None
+sys.modules["torch"] = None
+
 import pytest
 import numpy as np
 import serial
@@ -198,7 +204,6 @@ def test_main_arm64_competition_sends_task(monkeypatch):
         return bean, digit
 
     monkeypatch.setattr(main_arm64, "load_models", fake_load_models)
-    monkeypatch.setattr(serial, "Serial", lambda *a, **k: MagicMock())
 
     class FakeSerialPort:
         def __init__(self, ser):
@@ -219,7 +224,8 @@ def test_main_arm64_competition_sends_task(monkeypatch):
             pass
 
     fake_port = FakeSerialPort(MagicMock())
-    monkeypatch.setattr(main_arm64, "SerialPort", lambda ser: fake_port)
+    # main_arm64 now uses the encapsulated open_serial_port helper.
+    monkeypatch.setattr(main_arm64, "open_serial_port", lambda *a, **k: fake_port)
 
     main_arm64.main()
 
