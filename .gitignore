@@ -3,3 +3,4 @@ data/*
 tools/onnx/*
 .worktrees/
 */__pycache__/*
+.claude/
