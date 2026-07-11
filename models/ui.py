@@ -1,4 +1,6 @@
 import logging
+import queue
+import threading
 import tkinter as tk
 
 import cv2
@@ -32,11 +34,12 @@ DEFAULT_UI_CFG = {
     "video": {"max_height": 420, "fit_mode": "contain"},
     "controls": {
         "touch_mode": False,
-        "slider_width": 8,
-        "slider_height": 8,
+        "slider_width": 16,
+        "slider_height": 32,
         "button_height": 16,
         "padding": 1,
         "font_scale": 0.8,
+        "inference_overlay": True,
     },
 }
 
@@ -65,6 +68,13 @@ class CalibrationUI:
         self.mode = "bean"
         self._window_ok = True
         self._running = False
+
+        self._infer_queue = queue.Queue(maxsize=1)
+        self._result_lock = threading.Lock()
+        self._latest_dets = {"bean": None, "digit": None}
+        self._latest_names = {"bean": None, "digit": None}
+        self._infer_thread = None
+        self._save_pending = None
 
         self._load_cfg()
         self._apply_ui_cfg()
@@ -113,6 +123,7 @@ class CalibrationUI:
         self.button_height = int(ctl["button_height"])
         self.padding = int(ctl["padding"])
         self.font_scale = float(ctl["font_scale"])
+        self.inference_overlay = bool(ctl.get("inference_overlay", True))
 
         self.display_w = self.window_width
         self.display_h = self.video_max_height
@@ -161,12 +172,16 @@ class CalibrationUI:
         self._configure_pending = self.root.after(200, self._apply_geometry)
 
     def _apply_geometry(self):
-        """Recompute display size and recreate sliders to fit current window."""
+        """Recompute display size when the window is resized.
+
+        Sliders are intentionally not recreated here; they are only rebuilt
+        when the camera mode changes. This keeps slider dragging smooth and
+        prevents flicker caused by repeated widget destruction/creation.
+        """
         if not self._window_ok:
             return
         self.window_width = max(1, self.root.winfo_width())
         self.window_height = max(1, self.root.winfo_height())
-        self._create_sliders(self.mode)
 
     def _toggle_fullscreen(self, _event=None):
         """Toggle fullscreen state, bound to the 'f' key for field debugging."""
@@ -178,6 +193,72 @@ class CalibrationUI:
     def _save_cfg(self):
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             yaml.dump(self.cfg, f, sort_keys=False, allow_unicode=True)
+        self._save_pending = None
+
+    def _start_inference_worker(self):
+        """Start a background thread for model inference if models are loaded."""
+        if not self.inference_overlay:
+            return
+        if self.bean_model is None and self.digit_model is None:
+            return
+        self._infer_thread = threading.Thread(
+            target=self._inference_worker, daemon=True
+        )
+        self._infer_thread.start()
+
+    def _stop_inference_worker(self):
+        """Signal the inference worker to stop and wait for it to finish."""
+        if self._infer_thread is None or not self._infer_thread.is_alive():
+            return
+        # Wake the worker if it is blocked waiting for a frame.
+        try:
+            self._infer_queue.put_nowait(None)
+        except queue.Full:
+            pass
+        self._infer_thread.join(timeout=1.0)
+        self._infer_thread = None
+
+    def _inference_worker(self):
+        """Consume frames from the queue and run inference in the background."""
+        while self._running:
+            try:
+                item = self._infer_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            if item is None:
+                break
+            mode, frame = item
+            if not self._running:
+                break
+            model = self.bean_model if mode == "bean" else self.digit_model
+            if model is None:
+                continue
+            try:
+                dets = model.predict(frame)
+                with self._result_lock:
+                    self._latest_dets[mode] = dets
+                    self._latest_names[mode] = model.names
+            except Exception as exc:
+                logging.error("Inference worker error (%s): %s", mode, exc)
+
+    def _submit_frame_for_inference(self, mode, frame):
+        """Hand the latest frame to the inference worker without blocking the UI."""
+        if not self.inference_overlay:
+            return
+        if self.bean_model is None and self.digit_model is None:
+            return
+        try:
+            self._infer_queue.put_nowait((mode, frame.copy()))
+        except queue.Full:
+            # The worker is still busy; replace the stale pending frame.
+            try:
+                self._infer_queue.get_nowait()
+            except queue.Empty:
+                pass
+            try:
+                self._infer_queue.put_nowait((mode, frame.copy()))
+            except queue.Full:
+                pass
 
     @staticmethod
     def _camera_resolution(cam, default_w=640, default_h=480):
@@ -319,7 +400,7 @@ class CalibrationUI:
                 orient=tk.HORIZONTAL,
                 variable=var,
                 command=lambda value, g=group, k=key: self._set_line(g, k, int(value)),
-                showvalue=True,
+                showvalue=False,
                 length=slider_length,
                 width=max(6, self.slider_width),
                 sliderlength=max(8, self.slider_height),
@@ -333,6 +414,11 @@ class CalibrationUI:
         if mode == self.mode:
             return
         self.mode = mode
+        # Clear stale detection results so the new view doesn't briefly show
+        # overlay from a previous calibration session.
+        with self._result_lock:
+            self._latest_dets[mode] = None
+            self._latest_names[mode] = None
         self._update_button_appearance()
         self._create_sliders(mode)
 
@@ -346,7 +432,14 @@ class CalibrationUI:
 
     def _set_line(self, group, key, value):
         self.cfg["lines"][group][key] = int(value)
-        self._save_cfg()
+        # Debounce YAML writes so rapid slider movements don't stall the UI
+        # with repeated disk I/O.
+        if self._save_pending is not None:
+            try:
+                self.root.after_cancel(self._save_pending)
+            except Exception:
+                pass
+        self._save_pending = self.root.after(300, self._save_cfg)
 
     def _draw_bean_lines(self, frame):
         h, w = frame.shape[:2]
@@ -411,7 +504,16 @@ class CalibrationUI:
                 self._draw_bean_lines(frame)
             else:
                 self._draw_digit_lines(frame)
-            self._draw_model_overlay(frame, model, error_y=30)
+
+            # Run inference in the background so the Tkinter event loop stays
+            # responsive to slider drags and button clicks.
+            if model is not None:
+                self._submit_frame_for_inference(self.mode, frame)
+                with self._result_lock:
+                    latest_dets = self._latest_dets[self.mode]
+                    latest_names = self._latest_names[self.mode]
+                if latest_dets is not None:
+                    self._draw_detections(frame, latest_dets, latest_names)
 
             # All calibration logic runs on the native-resolution frame;
             # only the displayed copy is scaled to fit the available container.
@@ -448,10 +550,12 @@ class CalibrationUI:
 
         print("Calibration UI started. Keys: 1=bean camera, 2=digit camera, ESC=exit")
         self._running = True
+        self._start_inference_worker()
         self._update_frame()
         try:
             self.root.mainloop()
         finally:
             self._running = False
+            self._stop_inference_worker()
             self.cam_bean.release()
             self.cam_digit.release()

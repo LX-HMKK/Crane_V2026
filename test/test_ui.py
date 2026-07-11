@@ -1,4 +1,5 @@
 import sys
+import time
 import tkinter as tk
 from pathlib import Path
 
@@ -85,11 +86,46 @@ def test_ui_saves_lines_on_change(tmp_path):
     ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
     ui._set_line("bean", "left_x", 150)
     ui._set_line("digit", "x1", 250)
+    # With debouncing the file is not written until _save_cfg is flushed.
+    ui._save_cfg()
 
     with open(cfg_path, "r") as f:
         saved = yaml.safe_load(f)
     assert saved["lines"]["bean"]["left_x"] == 150
     assert saved["lines"]["digit"]["x1"] == 250
+
+
+def test_set_line_debounces_save(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    ui._set_line("bean", "left_x", 150)
+    # File should not be written immediately while a debounced save is pending.
+    assert ui._save_pending is not None
+    text_before = cfg_path.read_text(encoding="utf-8")
+    assert "left_x: 150" not in text_before
+    # Flushing the pending save writes the file.
+    ui._save_cfg()
+    text_after = cfg_path.read_text(encoding="utf-8")
+    assert "left_x: 150" in text_after
+
+
+def test_apply_geometry_does_not_recreate_sliders(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    ui.root.winfo_width.return_value = 1024
+    ui.root.winfo_height.return_value = 600
+    create_calls = []
+    original_create = ui._create_sliders
+
+    def tracking_create(mode):
+        create_calls.append(mode)
+        original_create(mode)
+
+    monkeypatch.setattr(ui, "_create_sliders", tracking_create)
+    ui._apply_geometry()
+    ui._apply_geometry()
+    # _apply_geometry should no longer touch sliders.
+    assert create_calls == []
 
 
 def test_draw_bean_lines_smoke(tmp_path):
@@ -400,6 +436,26 @@ def test_slider_to_uses_native_camera_width(tmp_path, monkeypatch):
         assert kwargs["to"] == 1280
 
 
+def test_sliders_hide_value_and_use_large_handles(tmp_path, monkeypatch):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path,
+        {"controls": {"slider_width": 16, "slider_height": 32}},
+    )
+    created = []
+
+    def mock_scale(*args, **kwargs):
+        created.append(kwargs)
+        return MagicMock()
+
+    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    assert len(created) == 2
+    for kwargs in created:
+        assert kwargs["showvalue"] is False
+        assert kwargs["width"] >= 16
+        assert kwargs["sliderlength"] >= 32
+
+
 def test_lines_drawn_before_display_resize(tmp_path, monkeypatch):
     cfg_path = _write_cfg_with_ui(
         tmp_path,
@@ -430,3 +486,60 @@ def test_lines_drawn_before_display_resize(tmp_path, monkeypatch):
     # Make sure the resized output is smaller than native.
     resized = ui._resize_for_display(frame)
     assert resized.shape[0] <= 420
+
+
+def test_update_frame_does_not_block_on_slow_inference(tmp_path, monkeypatch):
+    """Regression check: video updates must stay responsive while inference is slow."""
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    cam_bean = MagicMock()
+    cam_bean.capture.return_value = (True, frame)
+    cam_digit = MagicMock()
+    cam_digit.capture.return_value = (True, frame)
+
+    model = MagicMock()
+    model.predict.side_effect = lambda f: (time.sleep(0.5), [])[1]
+    model.names = {0: "bean"}
+
+    root = MagicMock()
+    ui = CalibrationUI(
+        str(cfg_path), cam_bean, cam_digit, bean_model=model, root=root
+    )
+    ui._running = True
+    ui._start_inference_worker()
+    try:
+        start = time.monotonic()
+        ui._update_frame()
+        elapsed = time.monotonic() - start
+        # The UI thread must return immediately; it must not wait for the
+        # 500 ms inference sleep to finish.
+        assert elapsed < 0.1
+    finally:
+        ui._running = False
+        ui._stop_inference_worker()
+
+
+def test_inference_overlay_can_be_disabled_via_config(tmp_path):
+    cfg_path = _write_cfg_with_ui(
+        tmp_path, {"controls": {"inference_overlay": False}}
+    )
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    model = MagicMock()
+
+    ui = CalibrationUI(
+        str(cfg_path), cam_bean, cam_digit, bean_model=model, digit_model=model
+    )
+    assert ui.inference_overlay is False
+
+
+def test_mode_switch_clears_stale_detection_results(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
+    ui._latest_dets["digit"] = [[10, 10, 20, 20, 0.9, 0]]
+    ui._latest_names["digit"] = {0: "digit"}
+
+    ui._set_mode("digit")
+    assert ui._latest_dets["digit"] is None
+    assert ui._latest_names["digit"] is None
