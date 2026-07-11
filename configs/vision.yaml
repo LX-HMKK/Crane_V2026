@@ -14,21 +14,29 @@ cameras:
     height: 720
     fps: 15
     buffer_size: 1
+    auto_exposure: true
+    grayscale: false
   digit:
     device: /dev/crane_cam_digit
     width: 1280
     height: 720
     fps: 15
     buffer_size: 1
+    auto_exposure: true
+    grayscale: true
 models:
   bean:
     bin: assets/beans_v4.bin
     cfg: assets/beans_v4_rdkx5_config.yaml
     pt: assets/beans_v4.pt
+    conf_thres: 0.7
+    iou_thres: 0.45
   digit:
     bin: assets/num.bin
     cfg: assets/num_rdkx5_config.yaml
     pt: assets/num.pt
+    conf_thres: 0.7
+    iou_thres: 0.45
 inference:
   imgsz: 640
   conf_thres: 0.25
@@ -44,11 +52,12 @@ ui:
     fit_mode: contain
   controls:
     touch_mode: true
-    slider_width: 10
-    slider_height: 10
+    slider_width: 16
+    slider_height: 32
     button_height: 20
     padding: 1
     font_scale: 0.8
+    inference_overlay: true
 scan:
   frames: 5
   max_retries: 2
