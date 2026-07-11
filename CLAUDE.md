@@ -29,7 +29,7 @@ docs/              # 部署与运行时文档
                    #   superpowers/           – 设计文档与实现计划
 models/            # 视觉运行时源码
                    #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
-                   #   bean_model.py, digit_model.py, camera.py
+                   #   bean_model.py, digit_model.py, camera.py, pt_model.py
                    #   serial_port.py, task_generator.py, mapping.py, ui.py
 scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 部署入口（竞赛 + 校准）
@@ -205,6 +205,27 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 - Letterbox 填充使用灰度值 `127`。
 - 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
 
+### 增量同步修改到 RDK X5
+
+日常调试时只应把**自上次提交以来修改过的文件**同步到板端，避免全量拷贝模型与数据集：
+
+1. 在 x86 开发机查看变更文件：
+
+   ```bash
+   git diff --name-only HEAD
+   ```
+
+2. 用 `scp`（本机无 `rsync`）按原目录结构逐文件复制到 RDK X5：`models/`、`scripts/`、`configs/`、`test/` 等源码与配置目录。例如：
+
+   ```bash
+   scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
+   scp models/ui.py root@192.168.128.10:/home/sunrise/Crane_WS/models/
+   ```
+
+3. 若新增文件或目录，同样用 `scp -r` 或先 `ssh` 到板端创建目录后再复制。
+
+> **规则：** 绝不覆盖 `assets/*.bin` 等大型资产，除非本次提交确实更新了模型；同步前先 `git diff --name-only HEAD` 确认变更范围。
+
 ### 在 RDK X5 上测试 main（不接串口）
 
 #### 1. 带 UI 的校准预览
@@ -313,6 +334,28 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 - `N4-N8`：放置区 4–8 上的数字（01–05）。
 
 运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
+
+## 相机与模型配置字段
+
+`configs/vision.yaml` 中除辅助线外，还经常需要调整以下字段：
+
+- `cameras.bean` / `cameras.digit`：
+  - `device`：V4L2 设备节点，可用 `scripts/main_arm64.py --list-cameras` 列出。
+  - `width` / `height`：捕获分辨率。
+  - `fps`：请求摄像头帧率（例如 `15`），实际帧率以设备返回为准。
+  - `buffer_size`：OpenCV 内部缓冲，竞赛模式建议设为 `1` 降低延迟。
+  - `auto_exposure`：`true` 启用自动曝光，`false` 改为手动曝光。
+  - `grayscale`：`true` 时把输出强制转成单通道后再扩为 3 通道 BGR；数字相机若使用灰度数据集训练，可设为 `true`。
+
+- `models.bean` / `models.digit`：
+  - `bin` / `cfg`：RDK X5 BPU 模型与部署配置。
+  - `pt`：`main_amd64.py` 在 x86 上使用的 Ultralytics 权重。
+  - `conf_thres` / `iou_thres`：可选，覆盖全局 `inference.conf_thres` / `inference.iou_thres`，用于按模型调参。
+
+- `ui.controls`：
+  - `touch_mode`：触摸屏布局开关。
+  - `slider_width` / `slider_height` / `button_height` / `padding` / `font_scale`：校准控件尺寸。
+  - `inference_overlay`：`true` 时在校准画面上叠加推理框与分区编号，方便观察模型输出。
 
 ## 串口
 
