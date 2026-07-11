@@ -135,11 +135,12 @@ def warmup_models(cam_bean, cam_digit, bean_model, digit_model):
             digit_model.predict(frame)
 
 
-def scan_once(bean_cam, digit_cam, bean_model, digit_model, task_gen, cfg):
-    """Capture frames, run inference, and generate a task triplet."""
-    if task_gen is None:
-        return None, "task generator unavailable"
+def scan_once_dets(bean_cam, digit_cam, bean_model, digit_model, cfg):
+    """Capture frames, run inference, and return raw detections.
 
+    Returns (all_bean_dets, all_digit_dets, reason). On camera failure
+    reason is set and the detection lists may be empty.
+    """
     frames = cfg["scan"]["frames"]
     all_bean_dets = []
     all_digit_dets = []
@@ -160,9 +161,23 @@ def scan_once(bean_cam, digit_cam, bean_model, digit_model, task_gen, cfg):
             all_digit_dets.extend(digit_model.predict(frame_d))
 
     if failures >= frames:
-        return None, "too many camera capture failures"
+        return all_bean_dets, all_digit_dets, "too many camera capture failures"
 
-    return task_gen.generate(all_bean_dets, all_digit_dets)
+    return all_bean_dets, all_digit_dets, "ok"
+
+
+def scan_once(bean_cam, digit_cam, bean_model, digit_model, task_gen, cfg):
+    """Capture frames, run inference, and generate a task triplet."""
+    if task_gen is None:
+        return None, "task generator unavailable"
+
+    bean_dets, digit_dets, reason = scan_once_dets(
+        bean_cam, digit_cam, bean_model, digit_model, cfg
+    )
+    if reason != "ok":
+        return None, reason
+
+    return task_gen.generate(bean_dets, digit_dets)
 
 
 def release_cameras(*cameras):

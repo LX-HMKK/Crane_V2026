@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-本仓库是 2026 物流技术创意赛的计算机视觉目标检测工作空间。它包含位于 `tools/yolov5/` 的 Ultralytics YOLOv5 副本（用于训练与导出），以及位于 `models/`、`scripts/`、`configs/` 和 `test/` 的独立 RDK X5 视觉运行时。运行时使用两路 USB 相机、两个 YOLO11 BPU `.bin` 模型（`num.bin` 识别数字，`beans_v4.bin` 识别豆子）和串口通信，为下位机生成 TASK 帧。
+本仓库是 2026 物流技术创意赛的计算机视觉目标检测工作空间。它包含位于 `tools/yolov5/` 的 Ultralytics YOLOv5 副本（用于训练与导出），以及位于 `models/`、`scripts/`、`configs/` 和 `test/` 的独立 RDK X5 视觉运行时。运行时使用两路 USB 相机、两个 YOLO11 BPU `.bin` 模型（`num.bin` 识别数字，`beans_v4.bin` 识别豆子）和串口通信，为下位机生成 12 字节结果帧。
 
 > **注意：** `docs/RDKx5_Bin_Inference.md` 描述 YOLO11 风格的 6 头部署流程，但 `tools/yolov5/` 下的训练代码是标准 YOLOv5。板端推理以部署文档为准，训练/导出以 YOLOv5 树为准。
 
@@ -227,9 +227,14 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 `configs/vision.yaml` 驱动竞赛逻辑：
 
-- `mapping.bean_to_digit`：将豆子类别映射为目标数字（默认黄豆→1、绿豆→2、白芸豆→3）。
+- `mapping.bean_to_digit`：将豆子类别映射为协议颜色编码（默认黄豆→1、绿豆→2、白芸豆→3），该编码同时作为结果帧 `C1-C3` 的颜色值。
 - `lines.bean.left_x` / `lines.bean.right_x`：竖直辅助线，将豆子相机画面划分为取货区 ①–③。
-- `lines.digit.horizontal_y` / `lines.digit.left_x` / `lines.digit.right_x`：辅助线，将数字相机画面划分为放置区 ④–⑧。
+- `lines.digit.x1` / `x2` / `x3` / `x4`：竖直辅助线，将数字相机画面划分为放置区 ④–⑧。
+
+结果帧格式为 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`：
+
+- `C1-C3`：取货区 1–3 的豆子颜色（01=黄豆，02=绿豆，03=白芸豆）。
+- `N4-N8`：放置区 4–8 上的数字（01–05）。
 
 运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
 
@@ -242,11 +247,20 @@ RDK X5 通过 40PIN 物理引脚 8/10 与下位机通信：
 | 8 | UART1_TXD | `/dev/ttyS1` |
 | 10 | UART1_RXD | `/dev/ttyS1` |
 
-- 默认配置为 **115200 8/N/1**，IO 电压 3.3V。
-- `/dev/ttyS0` 是系统调试串口，不建议用于下位机通信。
-- 与下位机连接需要交叉接线：RDK TX（引脚 8）→ 下位机 RX，RDK RX（引脚 10）→ 下位机 TX，GND → GND。
+下位机（STM32）侧使用 **USART6**，对应引脚：
 
-`scripts/main_arm64.py` 通过 `models/serial_port.open_serial_port()` 打开串口，参数来自 `configs/vision.yaml` 的 `serial` 段。`models/serial_port.py` 同时封装了 START 帧匹配（`AA 55 01 0D 0A`）和 TASK 帧发送（`BB 66 p1 p2 p3 1B 1A`）。
+| STM32 引脚 | 功能 |
+|---|---|
+| PG9 | USART6_RX |
+| PG14 | USART6_TX |
+
+- 默认配置为 **921600 8/N/1**，无流控，IO 电压 3.3V。
+- `/dev/ttyS0` 是系统调试串口，不建议用于下位机通信。
+- 与下位机连接需要交叉接线：RDK TX（引脚 8）→ 下位机 RX（PG9），RDK RX（引脚 10）→ 下位机 TX（PG14），GND → GND。
+
+`scripts/main_arm64.py` 通过 `models/serial_port.open_serial_port()` 打开串口，参数来自 `configs/vision.yaml` 的 `serial` 段。`models/serial_port.py` 封装了 START 命令检测（`A5 5A 01`）和 12 字节结果帧发送（`A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`）。
+
+竞赛模式下，视觉端在收到 START 命令后才开始识别并以 5–10 Hz 重复发送结果帧；若连续 300 ms 未收到 START 命令，则停止回传。
 
 ## 提交代码
 
@@ -276,5 +290,5 @@ Remove-Item .git-msg
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
-- `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。
+- `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 921600 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。
 - 在 x86 开发机上运行 `pytest test/` 时，测试模块会在顶部阻止 `ultralytics`/`torch` 导入，防止 pytest 收集阶段加载 PyTorch/CUDA 上下文导致内存暴涨。不要在测试文件顶部删除这些 `sys.modules[...] = None` 语句。

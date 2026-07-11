@@ -1,0 +1,9 @@
+feat(serial): 迁移串口协议到新通信协议
+
+- START 命令改为 A5 5A 01
+- 结果帧改为 12 字节 A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A
+- 波特率 115200 -> 921600
+- 竞赛模式改为轮询状态机：收到 START 后扫描，10 Hz 重复发送，300 ms 超时停止
+- TaskGenerator 新增 generate_frame() 生成 8 字节结果
+- 更新 configs/vision.yaml、测试与文档
+- docs/requirements.md 标注旧协议已过时

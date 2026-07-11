@@ -12,16 +12,16 @@ import pytest
 import serial
 import time
 import threading
-from models.serial_port import SerialPort, START_FRAME, open_serial_port
+from models.serial_port import SerialPort, START_COMMAND, open_serial_port
 
 
-def test_wait_start_detects_start_frame():
+def test_wait_start_detects_start_command():
     ser = serial.serial_for_url("loop://", timeout=0.01)
     port = SerialPort(ser)
 
     def writer():
         time.sleep(0.05)
-        ser.write(b"\x00\x01" + START_FRAME + b"\x00")
+        ser.write(b"\x00\x01" + START_COMMAND + b"\x00")
 
     t = threading.Thread(target=writer)
     t.start()
@@ -38,9 +38,9 @@ def test_wait_start_can_be_called_again_after_match():
 
     def writer():
         time.sleep(0.05)
-        ser.write(START_FRAME)
+        ser.write(START_COMMAND)
         time.sleep(0.05)
-        ser.write(START_FRAME)
+        ser.write(START_COMMAND)
 
     t = threading.Thread(target=writer)
     t.start()
@@ -50,15 +50,15 @@ def test_wait_start_can_be_called_again_after_match():
     port.close()
 
 
-def test_wait_start_split_frame():
+def test_wait_start_split_command():
     ser = serial.serial_for_url("loop://", timeout=0.01)
     port = SerialPort(ser)
 
     def writer():
         time.sleep(0.05)
-        ser.write(START_FRAME[:2])
+        ser.write(START_COMMAND[:2])
         time.sleep(0.05)
-        ser.write(START_FRAME[2:])
+        ser.write(START_COMMAND[2:])
 
     t = threading.Thread(target=writer)
     t.start()
@@ -79,32 +79,103 @@ def test_wait_start_timeout_returns_false():
     port.close()
 
 
-def test_send_task_writes_correct_frame():
+def test_poll_start_detects_start_command():
     ser = serial.serial_for_url("loop://", timeout=0.01)
     port = SerialPort(ser)
-    port.send_task(5, 6, 4)
+    ser.write(b"\x00" + START_COMMAND + b"\x00")
     time.sleep(0.05)
-    data = ser.read(20)
-    assert data == b"\xBB\x66\x05\x06\x04\x1B\x1A"
+    assert port.poll_start()
+    assert port.is_start_active()
     port.close()
 
 
-def test_send_task_rejects_invalid_payload():
+def test_poll_start_split_command():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    ser.write(START_COMMAND[:2])
+    time.sleep(0.05)
+    assert not port.poll_start()
+    ser.write(START_COMMAND[2:])
+    time.sleep(0.05)
+    assert port.poll_start()
+    port.close()
+
+
+def test_is_start_active_times_out():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    ser.write(START_COMMAND)
+    time.sleep(0.05)
+    assert port.poll_start()
+    assert port.is_start_active(timeout=0.3)
+    time.sleep(0.35)
+    assert not port.is_start_active(timeout=0.3)
+    port.close()
+
+
+def test_send_result_writes_correct_frame():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    port.send_result(1, 2, 3, 3, 1, 5, 2, 4)
+    time.sleep(0.05)
+    data = ser.read(20)
+    assert data == b"\xA5\x5A\x01\x02\x03\x03\x01\x05\x02\x04\x0D\x0A"
+    port.close()
+
+
+def test_send_result_rejects_invalid_payload():
     ser = serial.serial_for_url("loop://", timeout=0.01)
     port = SerialPort(ser)
     with pytest.raises(ValueError):
-        port.send_task(5, 300, 4)
+        port.send_result(1, 2, 3, 3, 1, 5, 2, 300)
+    port.close()
+
+
+def test_send_result_rejects_duplicate_colors():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    with pytest.raises(ValueError):
+        port.send_result(1, 1, 3, 3, 1, 5, 2, 4)
+    port.close()
+
+
+def test_send_result_rejects_duplicate_digits():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    with pytest.raises(ValueError):
+        port.send_result(1, 2, 3, 3, 1, 5, 3, 4)
+    port.close()
+
+
+def test_send_result_accepts_numpy_integers():
+    import numpy as np
+
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    port.send_result(
+        np.int64(1), np.uint8(2), 3, np.int32(3), 1, 5, 2, 4
+    )
+    time.sleep(0.05)
+    assert ser.read(20) == b"\xA5\x5A\x01\x02\x03\x03\x01\x05\x02\x04\x0D\x0A"
+    port.close()
+
+
+def test_send_result_rejects_float_values():
+    ser = serial.serial_for_url("loop://", timeout=0.01)
+    port = SerialPort(ser)
+    with pytest.raises(ValueError):
+        port.send_result(1.5, 2, 3, 3, 1, 5, 2, 4)
     port.close()
 
 
 def test_open_serial_port_uses_eight_n_one():
     fake_ser = mock.Mock(spec=serial.Serial)
     with mock.patch("serial.Serial", return_value=fake_ser) as mock_serial:
-        port = open_serial_port("/dev/ttyS1", 115200, timeout=0.05)
+        port = open_serial_port("/dev/ttyS1", 921600, timeout=0.05)
 
     mock_serial.assert_called_once_with(
         "/dev/ttyS1",
-        115200,
+        921600,
         bytesize=serial.EIGHTBITS,
         parity=serial.PARITY_NONE,
         stopbits=serial.STOPBITS_ONE,

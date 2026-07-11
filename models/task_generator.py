@@ -2,7 +2,7 @@ from models.mapping import bean_name_to_digit
 
 
 class TaskGenerator:
-    """Convert bean/digit detections into three placement-zone numbers."""
+    """Convert bean/digit detections into task results."""
 
     _BEAN_KEYS = ("left_x", "right_x")
     _DIGIT_KEYS = ("x1", "x2", "x3", "x4")
@@ -75,7 +75,41 @@ class TaskGenerator:
         x1, y1, x2, y2 = det[:4]
         return (x1 + x2) / 2, (y1 + y2) / 2
 
+    def _bean_color_code(self, name):
+        """Map bean class name to protocol color code (1=yellow, 2=green, 3=white)."""
+        return bean_name_to_digit(name, self.mapping)
+
+    def _aggregate_beans(self, bean_dets):
+        """Return {zone: det} for pickup zones 1-3, keeping highest-confidence detection."""
+        best = {1: None, 2: None, 3: None}
+        for det in bean_dets:
+            err = self._validate_detection(det)
+            if err:
+                return None, err
+            cx, cy = self._center(det)
+            zone = self._bean_zone(cx)
+            if best[zone] is None or det[4] > best[zone][4]:
+                best[zone] = det
+        return best, None
+
+    def _aggregate_digits(self, digit_dets):
+        """Return {zone: det} for placement zones 4-8, keeping highest-confidence detection."""
+        best = {4: None, 5: None, 6: None, 7: None, 8: None}
+        for det in digit_dets:
+            err = self._validate_detection(det)
+            if err:
+                return None, err
+            cx, cy = self._center(det)
+            zone = self._digit_zone(cx, cy)
+            if best[zone] is None or det[4] > best[zone][4]:
+                best[zone] = det
+        return best, None
+
     def generate(self, bean_dets, digit_dets):
+        """Legacy triplet: return (p1, p2, p3) placement zones for targets 1,2,3.
+
+        Kept for backward compatibility with main_amd64.py and existing tests.
+        """
         err = self._validate_lines()
         if err:
             return None, err
@@ -88,18 +122,10 @@ class TaskGenerator:
             if not isinstance(value, dict):
                 return None, f"invalid {name}"
 
-        # Aggregate best bean per pickup zone
-        bean_best = {1: None, 2: None, 3: None}
-        for det in bean_dets:
-            err = self._validate_detection(det)
-            if err:
-                return None, err
-            cx, cy = self._center(det)
-            zone = self._bean_zone(cx)
-            if bean_best[zone] is None or det[4] > bean_best[zone][4]:
-                bean_best[zone] = det
+        bean_best, err = self._aggregate_beans(bean_dets)
+        if err:
+            return None, err
 
-        # Map beans to target digits
         target_digits = {}
         for zone in (1, 2, 3):
             det = bean_best[zone]
@@ -112,23 +138,15 @@ class TaskGenerator:
             name = self.bean_names.get(cls_id)
             if name is None:
                 return None, f"unknown bean class {cls_id} in zone {zone}"
-            digit = bean_name_to_digit(name, self.mapping)
+            digit = self._bean_color_code(name)
             if digit is None:
                 return None, f"unmapped bean class '{name}' in zone {zone}"
             target_digits[zone] = digit
 
-        # Aggregate best digit per placement zone
-        digit_best = {4: None, 5: None, 6: None, 7: None, 8: None}
-        for det in digit_dets:
-            err = self._validate_detection(det)
-            if err:
-                return None, err
-            cx, cy = self._center(det)
-            zone = self._digit_zone(cx, cy)
-            if digit_best[zone] is None or det[4] > digit_best[zone][4]:
-                digit_best[zone] = det
+        digit_best, err = self._aggregate_digits(digit_dets)
+        if err:
+            return None, err
 
-        # Reverse lookup: target digit -> placement zone; detect duplicates
         placement_for_digit = {}
         for zone, det in digit_best.items():
             if det is None:
@@ -144,7 +162,6 @@ class TaskGenerator:
                 value = int(name)
             except ValueError:
                 return None, f"non-numeric digit name '{name}' in zone {zone}"
-            # Only digits 1-3 participate in task generation; 4/5 are empty boxes.
             if value not in (1, 2, 3):
                 continue
             if value in placement_for_digit:
@@ -163,3 +180,89 @@ class TaskGenerator:
             result.append(place)
 
         return tuple(result), "ok"
+
+    def generate_frame(self, bean_dets, digit_dets):
+        """Build the new protocol result frame payload.
+
+        Returns (c1, c2, c3, n4, n5, n6, n7, n8), "ok" on success, or
+        (None, reason) on failure.
+
+        c1-c3 are pickup-zone colors (1=yellow, 2=green, 3=white).
+        n4-n8 are the digits placed in placement zones 4-8.
+        """
+        err = self._validate_lines()
+        if err:
+            return None, err
+
+        for name, value in (
+            ("mapping", self.mapping),
+            ("bean_names", self.bean_names),
+            ("digit_names", self.digit_names),
+        ):
+            if not isinstance(value, dict):
+                return None, f"invalid {name}"
+
+        bean_best, err = self._aggregate_beans(bean_dets)
+        if err:
+            return None, err
+
+        colors = {}
+        for zone in (1, 2, 3):
+            det = bean_best[zone]
+            if det is None:
+                return None, f"missing bean in pickup zone {zone}"
+            try:
+                cls_id = int(det[5])
+            except (ValueError, TypeError):
+                return None, f"invalid bean class in zone {zone}"
+            name = self.bean_names.get(cls_id)
+            if name is None:
+                return None, f"unknown bean class {cls_id} in zone {zone}"
+            code = self._bean_color_code(name)
+            if code is None:
+                return None, f"unmapped bean class '{name}' in zone {zone}"
+            colors[zone] = code
+
+        if sorted(colors.values()) != [1, 2, 3]:
+            return None, f"pickup colors must be 1,2,3 exactly once, got {list(colors.values())}"
+
+        digit_best, err = self._aggregate_digits(digit_dets)
+        if err:
+            return None, err
+
+        digits = {}
+        for zone in (4, 5, 6, 7, 8):
+            det = digit_best[zone]
+            if det is None:
+                return None, f"missing digit in placement zone {zone}"
+            try:
+                cls_id = int(det[5])
+            except (ValueError, TypeError):
+                return None, f"invalid digit class in zone {zone}"
+            name = self.digit_names.get(cls_id)
+            if name is None:
+                return None, f"unknown digit class {cls_id} in zone {zone}"
+            try:
+                value = int(name)
+            except ValueError:
+                return None, f"non-numeric digit name '{name}' in zone {zone}"
+            if not (1 <= value <= 5):
+                return None, f"digit value {value} in zone {zone} out of range 1..5"
+            digits[zone] = value
+
+        if sorted(digits.values()) != [1, 2, 3, 4, 5]:
+            return None, (
+                f"placement digits must be 1..5 exactly once, got {list(digits.values())}"
+            )
+
+        payload = (
+            colors[1],
+            colors[2],
+            colors[3],
+            digits[4],
+            digits[5],
+            digits[6],
+            digits[7],
+            digits[8],
+        )
+        return payload, "ok"

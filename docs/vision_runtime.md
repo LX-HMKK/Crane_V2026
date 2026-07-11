@@ -28,27 +28,27 @@ python3 scripts/main_arm64.py --mock-cameras
 见 `configs/vision.yaml`，主要包含：
 
 - `serial`：串口设备、波特率、读超时。
+- `protocol`：START 命令超时（默认 300 ms）、结果帧发送间隔（默认 0.1 s，对应 10 Hz）、轮询间隔、扫描重试间隔。
 - `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小。
 - `models.bean` / `models.digit`：`.bin` 模型路径与对应 `_rdkx5_config.yaml`。
 - `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`。
 - `scan`：连续扫描帧数、最大重试次数、总超时。
 - `lines`：豆子/数字辅助线位置，会被 UI 自动改写。
-- `mapping.bean_to_digit`：黄豆→1、绿豆→2、白芸豆→3。
+- `mapping.bean_to_digit`：黄豆→1、绿豆→2、白芸豆→3（同时作为结果帧颜色编码）。
 
 ## 状态机
 
 ```text
-INIT → WAIT_START → SCANNING → READY → SEND_TASK → DONE（回到 WAIT_START）
+INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
 ```
 
 1. **INIT**：加载配置，初始化串口、两个 Camera、两个 BPU 模型，预热推理。
-2. **WAIT_START**：循环读取串口，滑动窗口匹配 `AA 55 01 0D 0A`。
-3. **SCANNING**：收到 START 后连续采集 `scan.frames` 帧，分别对豆子/数字相机做 BPU 推理。
-4. **READY**：按辅助线把检测框归入区域，取每个区域置信度最高者，查表得到 3 个目标放置区。
-5. **SEND_TASK**：发送固定 7 字节帧 `BB 66 p1 p2 p3 1B 1A`。
-6. **DONE**：回到 WAIT_START，等待下一轮 START。
+2. **WAIT_START**：循环读取串口，检测下位机发送的 `A5 5A 01` START 命令。未收到前视觉端保持静默，不发送任何数据。
+3. **SCANNING**：收到 START 后进入识别状态，连续采集 `scan.frames` 帧，分别对豆子/数字相机做 BPU 推理，通过 `TaskGenerator.generate_frame()` 生成 8 字节结果。
+4. **SENDING**：获得完整合法结果后，以 `protocol.send_interval_sec` 间隔（默认 0.1 s，即 10 Hz）重复发送 12 字节结果帧 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`。
+5. **SILENT**：若连续 300 ms 未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
 
-> **赛前准备阶段视觉保持串口静默**，只有收到 START 帧后才扫描并发送 TASK 帧。
+> **赛前准备阶段视觉保持串口静默**，只有收到 START 命令后才开始识别并回传结果帧。
 
 ## 看门狗
 
@@ -81,9 +81,10 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 2. 上电后先运行 `python3 scripts/main_arm64.py` 校准辅助线。
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。
-5. 从下位机发送 START 帧，验证返回 TASK 帧。
+5. 从下位机循环发送 START 命令 `A5 5A 01`，验证返回 12 字节结果帧。
 
 ## 记录
 
 - 实现日期：2026-07-07
+- 协议更新日期：2026-07-11
 - 测试环境：Windows 11 x86（pytest）+ RDKx5（待实测）

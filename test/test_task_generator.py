@@ -241,3 +241,92 @@ def test_default_mapping_and_helper():
     result, reason = gen.generate(bean_dets, digit_dets)
     assert result == (4, 5, 6)
     assert reason == "ok"
+
+
+def test_generate_frame_success():
+    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), digit_det(8, 5),
+    ]
+    gen = make_gen()
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    # zone1 yellow->1, zone2 green->2, zone3 white->3
+    # zone4 digit1, zone5 digit2, zone6 digit3, zone7 digit4, zone8 digit5
+    assert frame == (1, 2, 3, 1, 2, 3, 4, 5)
+    assert reason == "ok"
+
+
+def test_generate_frame_missing_pickup_zone():
+    bean_dets = [bean_det(1, 2), bean_det(3, 0)]  # no bean in zone 2
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), digit_det(8, 5),
+    ]
+    gen = make_gen()
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    assert frame is None
+    assert "missing bean in pickup zone 2" in reason
+
+
+def test_generate_frame_duplicate_color():
+    # Two yellow beans (cls_id 2 -> color 1) and no green.
+    bean_dets = [bean_det(1, 2), bean_det(2, 2), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), digit_det(8, 5),
+    ]
+    gen = make_gen()
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    assert frame is None
+    assert "pickup colors must be 1,2,3 exactly once" in reason
+
+
+def test_generate_frame_missing_digit_zone():
+    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3), digit_det(7, 4),
+    ]  # missing zone 8
+    gen = make_gen()
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    assert frame is None
+    assert "missing digit in placement zone 8" in reason
+
+
+def test_generate_frame_duplicate_digit():
+    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), digit_det(8, 4),  # duplicate 4
+    ]
+    gen = make_gen()
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    assert frame is None
+    assert "placement digits must be 1..5 exactly once" in reason
+
+
+def test_generate_frame_digit_out_of_range():
+    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), [495.0, 95.0, 505.0, 105.0, 0.9, 5],  # cls_id 5 -> name "6"
+    ]
+    mapping, bean_names, _ = make_names()
+    digit_names = {0: "1", 1: "2", 2: "3", 3: "4", 4: "5", 5: "6"}
+    gen = TaskGenerator(mapping, make_lines(), bean_names, digit_names)
+    frame, reason = gen.generate_frame(bean_dets, digit_dets)
+    assert frame is None
+    assert "out of range" in reason
+
+
+def test_generate_frame_keeps_generate_unchanged():
+    # generate() still ignores digits 4/5 and returns the placement triplet.
+    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
+    digit_dets = [
+        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
+        digit_det(7, 4), digit_det(8, 5),
+    ]
+    gen = make_gen()
+    result, reason = gen.generate(bean_dets, digit_dets)
+    assert result == (4, 5, 6)
+    assert reason == "ok"

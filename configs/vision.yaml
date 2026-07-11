@@ -1,7 +1,12 @@
 serial:
   port: /dev/ttyS1
-  baudrate: 115200
+  baudrate: 921600
   timeout: 0.05
+protocol:
+  start_timeout_sec: 0.3
+  send_interval_sec: 0.1
+  poll_interval_sec: 0.01
+  scan_retry_interval_sec: 0.5
 cameras:
   bean:
     device: 0

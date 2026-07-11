@@ -1,12 +1,11 @@
 import numbers
-import struct
 import time
 
 
-START_FRAME = bytes([0xAA, 0x55, 0x01, 0x0D, 0x0A])
-TASK_FRAME_SIZE = 7
-TASK_HEAD = bytes([0xBB, 0x66])
-TASK_TAIL = bytes([0x1B, 0x1A])
+START_COMMAND = bytes([0xA5, 0x5A, 0x01])
+RESULT_HEAD = bytes([0xA5, 0x5A])
+RESULT_TAIL = bytes([0x0D, 0x0A])
+RESULT_FRAME_SIZE = 12
 
 
 def open_serial_port(port, baudrate, timeout=0.05, **kwargs):
@@ -31,14 +30,46 @@ def open_serial_port(port, baudrate, timeout=0.05, **kwargs):
 
 
 class SerialPort:
-    """Handle START frame reception and TASK frame transmission."""
+    """Handle START command reception and 12-byte result frame transmission."""
 
     def __init__(self, ser):
         self.ser = ser
-        self.buf = bytearray()
+        self._buf = bytearray()
+        self.last_start_time = 0.0
+
+    def poll_start(self):
+        """Read available RX bytes and update last_start_time if START_COMMAND is seen.
+
+        Returns True if a new START_COMMAND was detected during this call.
+        The internal buffer is trimmed to at most len(START_COMMAND) - 1 bytes
+        so split commands are not lost.
+        """
+        data = self.ser.read(self.ser.in_waiting or 0)
+        if data:
+            self._buf.extend(data)
+
+        idx = self._buf.find(START_COMMAND)
+        if idx >= 0:
+            self.last_start_time = time.monotonic()
+            self._buf = self._buf[idx + len(START_COMMAND) :]
+            return True
+
+        # Keep only the trailing bytes that could form the start of a command.
+        max_keep = len(START_COMMAND) - 1
+        if len(self._buf) > max_keep:
+            self._buf = self._buf[-max_keep:]
+        return False
+
+    def is_start_active(self, timeout=0.3):
+        """Return True if a START_COMMAND was received within `timeout` seconds."""
+        return time.monotonic() - self.last_start_time < timeout
 
     def wait_start(self, timeout=None):
-        """Sliding-window match of AA 55 01 0D 0A."""
+        """Blocking helper: keep polling until a START_COMMAND arrives or timeout.
+
+        Provided for tests and backward compatibility; the competition loop
+        should use poll_start() / is_start_active() directly.
+        """
         deadline = None
         if timeout is not None:
             deadline = time.monotonic() + timeout
@@ -46,25 +77,36 @@ class SerialPort:
         while True:
             if deadline is not None and time.monotonic() > deadline:
                 return False
-            byte = self.ser.read(1)
-            if not byte:
-                continue
-            self.buf.extend(byte)
-            if len(self.buf) > 16:
-                self.buf.pop(0)
-            if len(self.buf) >= 5 and self.buf[-5:] == START_FRAME:
-                # Clear buffer so a subsequent call starts fresh.
-                self.buf.clear()
+            self.poll_start()
+            if self.is_start_active():
                 return True
 
-    def send_task(self, p1, p2, p3):
-        """Send a fixed 7-byte TASK frame: BB 66 p1 p2 p3 1B 1A."""
-        for p in (p1, p2, p3):
-            if not isinstance(p, numbers.Integral) or not (0 <= p <= 255):
+    def send_result(self, c1, c2, c3, n4, n5, n6, n7, n8):
+        """Send the fixed 12-byte result frame: A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A.
+
+        C1-C3 must be 1,2,3 (bean colors) each used exactly once.
+        N4-N8 must be 1..5 (placement digits) each used exactly once.
+        """
+        raw_values = (c1, c2, c3, n4, n5, n6, n7, n8)
+        for value in raw_values:
+            if not isinstance(value, numbers.Integral) or not (0 <= value <= 255):
                 raise ValueError(
-                    f"TASK payload values must be 0-255 ints, got {p!r}"
+                    f"Result payload values must be 0-255 ints, got {value!r}"
                 )
-        frame = TASK_HEAD + bytes([p1, p2, p3]) + TASK_TAIL
+
+        colors = [int(c1), int(c2), int(c3)]
+        digits = [int(n4), int(n5), int(n6), int(n7), int(n8)]
+
+        if sorted(colors) != [1, 2, 3]:
+            raise ValueError(
+                f"Pickup colors C1-C3 must be 1,2,3 exactly once, got {colors}"
+            )
+        if sorted(digits) != [1, 2, 3, 4, 5]:
+            raise ValueError(
+                f"Placement digits N4-N8 must be 1..5 exactly once, got {digits}"
+            )
+
+        frame = RESULT_HEAD + bytes(colors) + bytes(digits) + RESULT_TAIL
         self.ser.write(frame)
         self.ser.flush()
 
