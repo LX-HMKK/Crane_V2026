@@ -8,7 +8,7 @@ from models.yolo11_postprocess import letterbox, postprocess, scale_coords
 class Yolo11Model:
     """Shared inference pipeline for YOLO11-style BPU models."""
 
-    def __init__(self, bin_path, cfg_path, inference_cfg):
+    def __init__(self, bin_path, cfg_path, inference_cfg, model_cfg=None):
         self.bpu = BpuModel(bin_path, cfg_path)
         cfg = self.bpu.cfg
         self.imgsz = cfg["imgsz"]
@@ -16,8 +16,9 @@ class Yolo11Model:
         self.names = self._normalize_names(cfg["names"])
         self.reg_max = cfg["reg_max"]
         self.strides = cfg["strides"]
-        self.conf_thres = inference_cfg["conf_thres"]
-        self.iou_thres = inference_cfg["iou_thres"]
+        model_cfg = model_cfg or {}
+        self.conf_thres = model_cfg.get("conf_thres", inference_cfg["conf_thres"])
+        self.iou_thres = model_cfg.get("iou_thres", inference_cfg["iou_thres"])
         self.pad = inference_cfg.get("pad", 127)
 
     @staticmethod

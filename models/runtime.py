@@ -64,6 +64,8 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
             camera_cfg["height"],
             camera_cfg.get("buffer_size", 1),
             camera_cfg.get("fps"),
+            auto_exposure=camera_cfg.get("auto_exposure", True),
+            grayscale=camera_cfg.get("grayscale", False),
         )
     except RuntimeError:
         if fallback_empty:
@@ -83,11 +85,13 @@ def load_models(cfg):
         cfg["models"]["bean"]["bin"],
         cfg["models"]["bean"]["cfg"],
         cfg["inference"],
+        cfg["models"]["bean"],
     )
     digit_model = DigitModel(
         cfg["models"]["digit"]["bin"],
         cfg["models"]["digit"]["cfg"],
         cfg["inference"],
+        cfg["models"]["digit"],
     )
     return bean_model, digit_model
 
@@ -100,10 +104,12 @@ def load_pt_models(cfg):
     bean_model = PtBeanModel(
         cfg["models"]["bean"]["pt"],
         cfg["inference"],
+        cfg["models"]["bean"],
     )
     digit_model = PtDigitModel(
         cfg["models"]["digit"]["pt"],
         cfg["inference"],
+        cfg["models"]["digit"],
     )
     return bean_model, digit_model
 

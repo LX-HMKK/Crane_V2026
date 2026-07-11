@@ -30,7 +30,7 @@ def _default_device():
 class PtModel:
     """Ultralytics YOLO wrapper with the same interface as Yolo11Model."""
 
-    def __init__(self, pt_path, inference_cfg):
+    def __init__(self, pt_path, inference_cfg, model_cfg=None):
         if not HAS_ULTRALYTICS:
             raise EnvironmentError(
                 "ultralytics is not available; install it to run .pt models on x86"
@@ -39,8 +39,9 @@ class PtModel:
         self.model = YOLO(pt_path)
         self.model.to(self.device)
         self.imgsz = inference_cfg.get("imgsz", 640)
-        self.conf_thres = inference_cfg.get("conf_thres", 0.25)
-        self.iou_thres = inference_cfg.get("iou_thres", 0.45)
+        model_cfg = model_cfg or {}
+        self.conf_thres = model_cfg.get("conf_thres", inference_cfg.get("conf_thres", 0.25))
+        self.iou_thres = model_cfg.get("iou_thres", inference_cfg.get("iou_thres", 0.45))
         self.names = {int(i): str(name) for i, name in self.model.names.items()}
         logging.info("Loaded %s on device %s", pt_path, self.device)
 

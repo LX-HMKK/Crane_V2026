@@ -238,7 +238,24 @@ def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
         assert tensor.dtype == np.uint8
 
 
-def test_model_predict_asserts_tensor_rgb_order(tmp_path):
+def test_model_predict_uses_per_model_thresholds(tmp_path):
+    cfg_path = tmp_path / "override.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
+        MockBpu.return_value = bpu
+
+        model = BeanModel(
+            "assets/fake.bin",
+            str(cfg_path),
+            {"conf_thres": 0.25, "iou_thres": 0.45},
+            {"conf_thres": 0.7, "iou_thres": 0.3},
+        )
+        assert model.conf_thres == 0.7
+        assert model.iou_thres == 0.3
     cfg_path = tmp_path / "rgb.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
 
