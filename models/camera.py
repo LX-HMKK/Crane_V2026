@@ -5,7 +5,7 @@ import numpy as np
 class Camera:
     """Simple wrapper around cv2.VideoCapture."""
 
-    def __init__(self, device_index, width, height, buffer_size=1):
+    def __init__(self, device_index, width, height, buffer_size=1, fps=None):
         self.device_index = device_index
         self.cap = cv2.VideoCapture(device_index)
         if not self.cap.isOpened():
@@ -13,9 +13,12 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        if fps:
+            self.cap.set(cv2.CAP_PROP_FPS, fps)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
 
     def capture(self):
         return self.cap.read()

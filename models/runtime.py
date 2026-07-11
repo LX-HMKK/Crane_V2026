@@ -49,7 +49,8 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
     """Open a camera from config.
 
     Args:
-        camera_cfg: Dict with device, width, height, optional buffer_size.
+        camera_cfg: Dict with device, width, height, optional buffer_size and
+            optional fps.
         mock: If True, return a MockCamera instead of a real one.
         fallback_empty: If True and real camera fails, return an empty-pattern
             MockCamera instead of raising.
@@ -62,6 +63,7 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
             camera_cfg["width"],
             camera_cfg["height"],
             camera_cfg.get("buffer_size", 1),
+            camera_cfg.get("fps"),
         )
     except RuntimeError:
         if fallback_empty:

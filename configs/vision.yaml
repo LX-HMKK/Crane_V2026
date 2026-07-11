@@ -12,11 +12,13 @@ cameras:
     device: /dev/crane_cam_beans
     width: 1280
     height: 720
+    fps: 15
     buffer_size: 1
   digit:
     device: /dev/crane_cam_digit
     width: 1280
     height: 720
+    fps: 15
     buffer_size: 1
 models:
   bean:
