@@ -10,6 +10,7 @@ class Camera:
         self.cap = cv2.VideoCapture(device_index)
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open camera device {device_index}")
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)

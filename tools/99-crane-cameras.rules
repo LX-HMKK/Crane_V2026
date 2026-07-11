@@ -1,0 +1,14 @@
+# Crane USB camera udev rules
+# Cameras: Realtek USB Camera (0bda:1376)
+# Mapped by physical USB port. If you move a camera to another port,
+# update KERNELS accordingly.
+
+# Bean camera -> /dev/crane_cam_beans (currently on USB port 1-1.2)
+SUBSYSTEM=="video4linux", KERNEL=="video[0-9]*", ATTR{index}=="0", \
+    KERNELS=="1-1.2", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="1376", \
+    SYMLINK+="crane_cam_beans", TAG+="uaccess"
+
+# Digit camera -> /dev/crane_cam_digit (currently on USB port 1-1.4)
+SUBSYSTEM=="video4linux", KERNEL=="video[0-9]*", ATTR{index}=="0", \
+    KERNELS=="1-1.4", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="1376", \
+    SYMLINK+="crane_cam_digit", TAG+="uaccess"

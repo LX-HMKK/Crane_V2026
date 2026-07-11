@@ -9,12 +9,12 @@ protocol:
   scan_retry_interval_sec: 0.5
 cameras:
   bean:
-    device: 0
+    device: /dev/crane_cam_beans
     width: 1280
     height: 720
     buffer_size: 1
   digit:
-    device: 2
+    device: /dev/crane_cam_digit
     width: 1280
     height: 720
     buffer_size: 1
