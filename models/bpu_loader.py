@@ -1,11 +1,40 @@
 from pathlib import Path
 
+import cv2
+import numpy as np
+
 try:
-    import hobot_dnn as dnn
+    # RDK X5 newer images expose the API through hobot_dnn.pyeasy_dnn.
+    from hobot_dnn import pyeasy_dnn as dnn
     HAS_HOBOT = True
-except ImportError:
-    dnn = None
-    HAS_HOBOT = False
+except Exception:
+    try:
+        import hobot_dnn as dnn
+        HAS_HOBOT = hasattr(dnn, "load")
+    except Exception:
+        dnn = None
+        HAS_HOBOT = False
+
+
+def _nv12_from_rgb_nchw(tensor):
+    """Convert an RGB NCHW uint8 tensor to a flat NV12 buffer.
+
+    RDK X5 BPU models report their input as ``shape=(1,3,640,640),
+    layout=NCHW`` but their ``tensor_type`` is ``NV12``. The runtime
+    actually expects a flat ``H*W*1.5`` byte buffer in NV12 order.
+    """
+    _, _, h, w = tensor.shape
+    if h % 2 != 0 or w % 2 != 0:
+        raise ValueError(f"NV12 conversion requires even dimensions, got {h}x{w}")
+    rgb = tensor[0].transpose(1, 2, 0)  # (H,W,3)
+    i420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420).ravel()
+    y = i420[: h * w]
+    u = i420[h * w : h * w + h * w // 4]
+    v = i420[h * w + h * w // 4 :]
+    uv = np.empty((h * w // 2,), dtype=np.uint8)
+    uv[0::2] = u
+    uv[1::2] = v
+    return np.concatenate([y, uv])
 
 
 class BpuModel:
@@ -127,4 +156,21 @@ class BpuModel:
             )
         if not tensor.flags["C_CONTIGUOUS"]:
             tensor = np.ascontiguousarray(tensor)
-        return self._bpu_model.forward(tensor)
+
+        # RDK X5 NV12 models report NCHW shape but expect a flat NV12 buffer.
+        try:
+            input_type = self._bpu_model.inputs[0].properties.tensor_type
+        except Exception:
+            input_type = None
+        if input_type == "NV12":
+            tensor = _nv12_from_rgb_nchw(tensor)
+
+        outputs = self._bpu_model.forward(tensor)
+        # RDK X5 pyeasy_dnn returns PyDNNTensor objects; unwrap the numpy buffer.
+        if (
+            isinstance(outputs, (list, tuple))
+            and outputs
+            and hasattr(outputs[0], "buffer")
+        ):
+            outputs = [o.buffer for o in outputs]
+        return outputs

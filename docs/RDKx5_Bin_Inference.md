@@ -27,6 +27,7 @@
 
 | 文件 | 来源 | 作用 |
 |------|------|------|
+| `tools/99-crane-cameras.rules` | 本项目 | USB 摄像头 udev 绑定规则（复制到 `/etc/udev/rules.d/`） |
 | `assets/beans_v4.bin` | 本项目 | 豆子成熟度 BPU 模型 |
 | `assets/num.bin` | 本项目 | 数字检测 BPU 模型 |
 | `assets/beans_v4_rdkx5_config.yaml` | 本项目 | 豆子模型配置（nc、names、imgsz、reg_max、strides） |
@@ -38,7 +39,7 @@
 
 从开发机拷到板端示例：
 ```bash
-scp -r models/ scripts/ configs/ \
+scp -r models/ scripts/ configs/ tools/99-crane-cameras.rules \
     assets/beans_v4.bin assets/num.bin \
     assets/beans_v4_rdkx5_config.yaml assets/num_rdkx5_config.yaml \
     rdkx5:/home/root/crane/
@@ -96,15 +97,16 @@ python3 scripts/main_arm64.py --config /path/to/vision.yaml
 
 `scripts/main_arm64.py` 内部的处理链：
 
-1. **加载模型**：`dnn.load(model)` → 取 `models[0]`
+1. **加载模型**：`from hobot_dnn import pyeasy_dnn as dnn`，然后 `dnn.load(model)` → 取 `models[0]`
 2. **读图**：`cv2.imread`（BGR）
 3. **Letterbox**：等比缩放到 640×640，空白处填 **127（灰）**，居中放置
 4. **预处理**：BGR → RGB，保持 uint8 `[0,255]`，转 NCHW，加 batch 维
    - 归一化（÷255）已编译进模型（`data_scale`），故输入保持 uint8，不再缩放
-5. **前向**：`m.forward(input_tensor)` → 6 个输出 tensor
-6. **后处理**：`postprocess()` —— DFL 解码、还原 xyxy、sigmoid、NMS
-7. **坐标回映**：letterbox 坐标还原回原图（减 `pad`、除 `scale`）
-8. **输出**：打印每个检测 `类别: 置信度 at (x1,y1)-(x2,y2)`
+5. **前向**：由于 BPU 模型 `tensor_type` 为 **NV12**，`models/bpu_loader.py` 会把 RGB NCHW 张量转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再调用 `m.forward(...)`
+6. **输出解包**：`pyeasy_dnn` 返回 6 个 `PyDNNTensor` 对象，代码解包 `.buffer` 得到 numpy 数组
+7. **后处理**：`postprocess()` —— DFL 解码、还原 xyxy、sigmoid、NMS
+8. **坐标回映**：letterbox 坐标还原回原图（减 `pad`、除 `scale`）
+9. **输出**：打印每个检测 `类别: 置信度 at (x1,y1)-(x2,y2)`
 
 ## 6. 输出格式与后处理
 

@@ -197,13 +197,13 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 ### RDKx5 板端推理
 
-完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main_arm64.py`；部署时需把 `models/`、`scripts/`、`configs/`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main_arm64.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
+完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main_arm64.py`；部署时需把 `models/`、`scripts/`、`configs/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main_arm64.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
-- 输入：RGB NCHW `uint8` 张量，形状 `1×3×640×640`；归一化（`/255`）已编译进模型。
+- `hobot_dnn` 实际使用 `from hobot_dnn import pyeasy_dnn as dnn`，并回退到旧的 `import hobot_dnn as dnn`；仅在 RDKx5 镜像中可用。
+- 输入：模型元数据报告为 RGB NCHW `uint8` 张量，形状 `1×3×640×640`，但 `tensor_type` 为 `NV12`；运行时内部把 RGB NCHW 转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再喂给 BPU。归一化（`/255`）已编译进模型。
+- 输出为 6 个 `PyDNNTensor` 对象，代码会自动解包 `.buffer` 得到 numpy 数组：`s_bbox`、`m_bbox`、`l_bbox`、`s_cls`、`m_cls`、`l_cls`。
 - Letterbox 填充使用灰度值 `127`。
-- 输出为 6 个张量：`s_bbox`、`m_bbox`、`l_bbox`、`s_cls`、`m_cls`、`l_cls`。
 - 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
-- 脚本依赖 `hobot_dnn`，仅在 RDKx5 镜像中可用。
 
 ## 数据集规范
 
