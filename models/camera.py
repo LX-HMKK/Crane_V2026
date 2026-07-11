@@ -1,3 +1,5 @@
+import logging
+
 import cv2
 import numpy as np
 
@@ -5,7 +7,16 @@ import numpy as np
 class Camera:
     """Simple wrapper around cv2.VideoCapture."""
 
-    def __init__(self, device_index, width, height, buffer_size=1, fps=None):
+    def __init__(
+        self,
+        device_index,
+        width,
+        height,
+        buffer_size=1,
+        fps=None,
+        auto_exposure=True,
+        grayscale=False,
+    ):
         self.device_index = device_index
         self.cap = cv2.VideoCapture(device_index)
         if not self.cap.isOpened():
@@ -19,9 +30,35 @@ class Camera:
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+        self.grayscale = bool(grayscale)
+
+        # V4L2 auto exposure: 0.25 = manual, 0.75 = aperture priority (auto).
+        auto_exposure_value = 0.75 if auto_exposure else 0.25
+        if not self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, auto_exposure_value):
+            logging.warning(
+                "Failed to set auto_exposure=%s for camera %s",
+                auto_exposure,
+                device_index,
+            )
 
     def capture(self):
-        return self.cap.read()
+        ok, frame = self.cap.read()
+        if not ok or frame is None:
+            return ok, frame
+
+        # Some USB cameras deliver single-channel frames. Convert to BGR
+        # so downstream code always receives a 3-channel image.
+        if frame.ndim == 2 or frame.shape[2] == 1:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+
+        # Optionally force grayscale output (still 3 channels so the YOLO
+        # pipeline can consume it unchanged). Useful for the digit camera
+        # whose training data was grayscale.
+        if self.grayscale and frame.shape[2] == 3:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            frame = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+        return ok, frame
 
     def release(self):
         self.cap.release()
