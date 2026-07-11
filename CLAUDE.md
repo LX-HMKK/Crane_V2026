@@ -205,6 +205,82 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 - Letterbox 填充使用灰度值 `127`。
 - 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
 
+### 在 RDK X5 上测试 main（不接串口）
+
+#### 1. 带 UI 的校准预览
+
+```bash
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+python3 scripts/main_arm64.py
+```
+
+默认即校准 UI，且**不会打开串口**。按 `1` / `2` 切换豆子/数字相机视图，拖动面板上的滑块调整辅助线，按 `ESC` 退出，位置自动保存到 `configs/vision.yaml`。
+
+> 需要 RDK X5 已接显示器，或 SSH 带 X11 转发。Windows 上先开启 X server（如 VcXsrv / MobaXterm），再用 `ssh -X root@192.168.128.10`。
+
+#### 2. 无 UI 单帧扫描验证
+
+```bash
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+python3 - <<'PY'
+import logging, sys
+sys.path.insert(0, '.')
+logging.basicConfig(level=logging.INFO)
+from models.runtime import (
+    load_vision_cfg, load_models, create_task_generator,
+    open_camera, scan_once_dets,
+)
+cfg = load_vision_cfg('configs/vision.yaml')
+bean_model, digit_model = load_models(cfg)
+task_gen = create_task_generator(cfg, bean_model, digit_model)
+cam_bean = open_camera(cfg['cameras']['bean'])
+cam_digit = open_camera(cfg['cameras']['digit'])
+bean_dets, digit_dets, reason = scan_once_dets(
+    cam_bean, cam_digit, bean_model, digit_model, cfg
+)
+print('reason :', reason)
+print('bean   :', bean_dets)
+print('digit  :', digit_dets)
+if reason == 'ok':
+    print('frame  :', task_gen.generate_frame(bean_dets, digit_dets))
+cam_bean.release(); cam_digit.release()
+PY
+```
+
+#### 3. 无串口测试竞赛主循环
+
+可用临时 PTY 替代 `/dev/ttyS1`，验证 `--no-ui` 能正常加载模型并进入等待 START 状态：
+
+```bash
+# 1. 在 RDK X5 上先创建虚拟串口
+ssh root@192.168.128.10
+python3 - <<'PY'
+import os, pty, signal, sys, time
+def cleanup(s, f): sys.exit(0)
+signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, cleanup)
+master, slave = pty.openpty()
+slave_path = os.ttyname(slave)
+link = '/tmp/crane_ttyS1'
+if os.path.islink(link) or os.path.exists(link):
+    os.remove(link)
+os.symlink(slave_path, link)
+print(f'PTY {link} -> {slave_path}', flush=True)
+os.close(slave)
+while True: time.sleep(1)
+PY
+
+# 2. 再开一个 SSH 窗口运行 main（把 serial.port 指向临时 PTY）
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
+python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
+```
+
+> 测试完成后记得杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
+
 ## 数据集规范
 
 每个数据集目录应包含：

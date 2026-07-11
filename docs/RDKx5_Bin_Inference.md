@@ -93,6 +93,52 @@ python3 scripts/main_arm64.py --config /path/to/vision.yaml
 ./scripts/watchdog.sh
 ```
 
+### 4.4 不接串口测试 main
+
+当前未接 STM32 串口时，仍可用以下方式验证 `main_arm64.py` 在板端能正常加载模型、读取双摄像头并进入主循环。
+
+#### 带 UI 的校准预览（默认即 UI，不打开串口）
+
+```bash
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+python3 scripts/main_arm64.py
+```
+
+按 `1` / `2` 切换豆子/数字相机，按 `ESC` 退出；辅助线位置自动保存到 `configs/vision.yaml`。
+
+> 需要 RDK X5 接显示器，或 SSH 带 X11 转发（Windows 先开 X server，再用 `ssh -X root@192.168.128.10`）。
+
+#### 无 UI 竞赛主循环（用 PTY 替代串口）
+
+```bash
+# 1. 创建虚拟串口
+ssh root@192.168.128.10
+python3 - <<'PY'
+import os, pty, signal, sys, time
+def cleanup(s, f): sys.exit(0)
+signal.signal(signal.SIGTERM, cleanup)
+signal.signal(signal.SIGINT, cleanup)
+master, slave = pty.openpty()
+slave_path = os.ttyname(slave)
+link = '/tmp/crane_ttyS1'
+if os.path.islink(link) or os.path.exists(link):
+    os.remove(link)
+os.symlink(slave_path, link)
+print(f'PTY {link} -> {slave_path}', flush=True)
+os.close(slave)
+while True: time.sleep(1)
+PY
+
+# 2. 另开窗口运行 main
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
+python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
+```
+
+> 测试结束后杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
+
 ## 5. 推理流程
 
 `scripts/main_arm64.py` 内部的处理链：
