@@ -87,9 +87,9 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 
 ## 文档
 
-- [docs/vision_runtime.md](docs/vision_runtime.md) — 运行时说明、状态机、配置字段
-- [docs/vision_mapping.md](docs/vision_mapping.md) — 辅助线分区与映射规则
-- [docs/RDKx5_Bin_Inference.md](docs/RDKx5_Bin_Inference.md) — YOLO11 `.bin` 板端调用细节
+- [docs/guides/vision_runtime.md](docs/guides/vision_runtime.md) — 运行时说明、状态机、配置字段
+- [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md) — 辅助线分区与映射规则
+- [docs/guides/RDKx5_Bin_Inference.md](docs/guides/RDKx5_Bin_Inference.md) — YOLO11 `.bin` 板端调用细节
 
 ## 约束
 

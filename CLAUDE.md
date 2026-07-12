@@ -1,12 +1,12 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working in this repository.
 
 ## 项目概述
 
-本仓库是 2026 物流技术创意赛的计算机视觉目标检测工作空间。它包含位于 `tools/yolov5/` 的 Ultralytics YOLOv5 副本（用于训练与导出），以及位于 `models/`、`scripts/`、`configs/` 和 `test/` 的独立 RDK X5 视觉运行时。运行时使用两路 USB 相机、两个 YOLO11 BPU `.bin` 模型（`num.bin` 识别数字，`beans_v4.bin` 识别豆子）和串口通信，为下位机生成 12 字节结果帧。
+2026 物流技术创意赛视觉目标检测工作空间：YOLOv5 训练/导出工具（`tools/yolov5/`）+ RDK X5 视觉运行时（`models/`、`scripts/`、`configs/`）。双 USB 相机 + 两路 YOLO11 BPU `.bin` 模型 + 串口，向下位机发送 12 字节结果帧。
 
-> **注意：** `docs/RDKx5_Bin_Inference.md` 描述 YOLO11 风格的 6 头部署流程，但 `tools/yolov5/` 下的训练代码是标准 YOLOv5。板端推理以部署文档为准，训练/导出以 YOLOv5 树为准。
+> 板端推理以 `docs/guides/RDKx5_Bin_Inference.md` 为准；训练/导出以 `tools/yolov5/` 为准。
 
 ## 仓库目录结构
 
@@ -23,9 +23,18 @@ data/              # 数据集（YOLO 格式：images/ + labels/ + dataset.yaml�
                    #   output_gray/    – 处理后的数字数据集 + split_dataset/
                    #   beans/          – 豆子图片 + beans_split/
 docs/              # 部署与运行时文档
-                   #   RDKx5_Bin_Inference.md – YOLO11 BPU 板端工作流
-                   #   vision_runtime.md      – 视觉运行时入口与状态机
-                   #   vision_mapping.md      – 分区映射与辅助线规则
+                   #   runbooks/
+                   #     commands.md           – 完整命令清单
+                   #     serial_port.md        – 串口硬件与协议
+                   #   reference/
+                   #     dataset_spec.md       – 数据集规范
+                   #     asset_naming.md       – 资产命名规范
+                   #     CRANE_VISION_PROTOCOL.md – 通信协议
+                   #     requirements.md       – 原始需求（已归档）
+                   #   guides/
+                   #     RDKx5_Bin_Inference.md – YOLO11 BPU 板端工作流
+                   #     vision_runtime.md      – 视觉运行时入口与状态机
+                   #     vision_mapping.md      – 分区映射与辅助线规则
                    #   superpowers/           – 设计文档与实现计划
 models/            # 视觉运行时源码
                    #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
@@ -47,278 +56,25 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 
 ## 常用命令
 
-以下命令均在仓库根目录执行。YOLOv5 训练/验证/导出命令引用 `tools/yolov5/` 中的脚本。
+完整命令清单（conda 环境、YOLOv5 训练/导出、RDK X5 部署与测试）见 [docs/runbooks/commands.md](docs/runbooks/commands.md)。
 
-### 开发/测试虚拟环境
-
-本项目使用独立的 Miniforge 虚拟环境，避免与系统或其他项目的 `opencv-python` / `opencv-python-headless` 等包冲突：
-
-- 环境路径：`D:\conda_envs\crane-clean`
-- Python：3.11
-- 包源：USTC PyPI 镜像
-
-所有 x86 开发/测试命令均通过该环境执行：
+快速入口：
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python ...
-```
-
-#### 安装运行时/测试依赖
-
-```bash
-conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https://pypi.mirrors.ustc.edu.cn/simple -r requirements.txt
-```
-
-#### 运行单元测试
-
-```bash
+# 单元测试
 conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
-```
 
-### 视觉运行时命令
-
-这些命令用于操作 RDK X5 竞赛运行时。`--ui` 校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
-
-#### 使用实时预览校准辅助线
-
-```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py
-```
-
-按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
-
-> `--ui` 仍可作为默认校准模式的向后兼容别名使用。在没有相机的 x86 开发机上，可配合 `--mock-cameras` 预览校准 UI。
-
-#### 无相机测试校准 UI
-
-```bash
+# 校准辅助线
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock-cameras
-```
 
-使用合成帧启动校准 UI，用于无相机环境下的 UI 开发与辅助线布局测试。按 `ESC` 保存的辅助线位置同样写回 `configs/vision.yaml`。
-
-#### 列出可用相机
-
-```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --list-cameras
-```
-
-#### 运行竞赛模式（仅限 RDK X5）
-
-```bash
+# 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py --no-ui
 ```
 
-#### 自动重启竞赛模式
+## 数据集与资产规范
 
-```bash
-./scripts/watchdog.sh
-```
-
-#### x86 完整流程测试（无串口）
-
-`main_amd64.py` 使用 `assets/*.pt` 进行 PyTorch 推理（依赖 `ultralytics`）。当前 `crane-clean` 环境已安装 GPU 版 `torch 2.5.1+cu121` 和 `ultralytics`，可直接运行：
-
-```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
-```
-
-按 `SPACE` 或 `s` 触发一次扫描，控制台打印 `SCAN RESULT: x y z` 或失败原因，按 `ESC` 退出。要单次扫描并退出，可加上 `--once`：
-
-```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
-```
-
-如果当前环境没有 `ultralytics`，`main_amd64.py` 会自动退回到 camera-only 模式并打印 `SCAN FAILED: task generator unavailable`。
-
-### 安装依赖（YOLOv5 训练）
-
-```bash
-pip install -r tools/yolov5/requirements.txt
-```
-
-### 训练检测器
-
-```bash
-python tools/yolov5/train.py \
-  --data data/output_gray/images/dataset.yaml \
-  --weights yolov5n.pt \
-  --img 640 \
-  --batch 16 \
-  --epochs 100 \
-  --project runs/train \
-  --name exp
-```
-
-豆子数据集使用 `data/beans/beans_split/beans_split.yaml`。权重首次使用时会自动下载。
-
-### 验证模型
-
-```bash
-python tools/yolov5/val.py \
-  --data data/output_gray/images/dataset.yaml \
-  --weights assets/num.pt \
-  --img 640
-```
-
-### 运行推理
-
-```bash
-python tools/yolov5/detect.py \
-  --weights assets/num.pt \
-  --source data/dataset3/images/val/ \
-  --img 640 \
-  --conf-thres 0.25 \
-  --iou-thres 0.45 \
-  --project runs/detect \
-  --name exp
-```
-
-### 导出 ONNX
-
-```bash
-python tools/yolov5/export.py \
-  --weights assets/num.pt \
-  --include onnx \
-  --imgsz 640
-```
-
-### 运行 YOLOv5 测试
-
-```bash
-python -m pytest tools/yolov5/tests/
-```
-
-运行单个测试文件：
-
-```bash
-python -m pytest tools/yolov5/tests/test_invariant_export.py -v
-```
-
-### RDKx5 板端推理
-
-完整流程见 `docs/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main_arm64.py`；部署时需把 `models/`、`scripts/`、`configs/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main_arm64.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
-
-- `hobot_dnn` 实际使用 `from hobot_dnn import pyeasy_dnn as dnn`，并回退到旧的 `import hobot_dnn as dnn`；仅在 RDKx5 镜像中可用。
-- 输入：模型元数据报告为 RGB NCHW `uint8` 张量，形状 `1×3×640×640`，但 `tensor_type` 为 `NV12`；运行时内部把 RGB NCHW 转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再喂给 BPU。归一化（`/255`）已编译进模型。
-- 输出为 6 个 `PyDNNTensor` 对象，代码会自动解包 `.buffer` 得到 numpy 数组：`s_bbox`、`m_bbox`、`l_bbox`、`s_cls`、`m_cls`、`l_cls`。
-- Letterbox 填充使用灰度值 `127`。
-- 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
-
-### 增量同步修改到 RDK X5
-
-日常调试时只应把**自上次提交以来修改过的文件**同步到板端，避免全量拷贝模型与数据集：
-
-1. 在 x86 开发机查看变更文件：
-
-   ```bash
-   git diff --name-only HEAD
-   ```
-
-2. 用 `scp`（本机无 `rsync`）按原目录结构逐文件复制到 RDK X5：`models/`、`scripts/`、`configs/`、`test/` 等源码与配置目录。例如：
-
-   ```bash
-   scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
-   scp models/ui.py root@192.168.128.10:/home/sunrise/Crane_WS/models/
-   ```
-
-3. 若新增文件或目录，同样用 `scp -r` 或先 `ssh` 到板端创建目录后再复制。
-
-> **规则：** 绝不覆盖 `assets/*.bin` 等大型资产，除非本次提交确实更新了模型；同步前先 `git diff --name-only HEAD` 确认变更范围。
-
-### 在 RDK X5 上测试 main（不接串口）
-
-#### 1. 带 UI 的校准预览
-
-```bash
-ssh root@192.168.128.10
-cd /home/sunrise/Crane_WS
-python3 scripts/main_arm64.py
-```
-
-默认即校准 UI，且**不会打开串口**。按 `1` / `2` 切换豆子/数字相机视图，拖动面板上的滑块调整辅助线，按 `ESC` 退出，位置自动保存到 `configs/vision.yaml`。
-
-> 需要 RDK X5 已接显示器，或 SSH 带 X11 转发。Windows 上先开启 X server（如 VcXsrv / MobaXterm），再用 `ssh -X root@192.168.128.10`。
-
-#### 2. 无 UI 单帧扫描验证
-
-```bash
-ssh root@192.168.128.10
-cd /home/sunrise/Crane_WS
-python3 - <<'PY'
-import logging, sys
-sys.path.insert(0, '.')
-logging.basicConfig(level=logging.INFO)
-from models.runtime import (
-    load_vision_cfg, load_models, create_task_generator,
-    open_camera, scan_once_dets,
-)
-cfg = load_vision_cfg('configs/vision.yaml')
-bean_model, digit_model = load_models(cfg)
-task_gen = create_task_generator(cfg, bean_model, digit_model)
-cam_bean = open_camera(cfg['cameras']['bean'])
-cam_digit = open_camera(cfg['cameras']['digit'])
-bean_dets, digit_dets, reason = scan_once_dets(
-    cam_bean, cam_digit, bean_model, digit_model, cfg
-)
-print('reason :', reason)
-print('bean   :', bean_dets)
-print('digit  :', digit_dets)
-if reason == 'ok':
-    print('frame  :', task_gen.generate_frame(bean_dets, digit_dets))
-cam_bean.release(); cam_digit.release()
-PY
-```
-
-#### 3. 无串口测试竞赛主循环
-
-可用临时 PTY 替代 `/dev/ttyS1`，验证 `--no-ui` 能正常加载模型并进入等待 START 状态：
-
-```bash
-# 1. 在 RDK X5 上先创建虚拟串口
-ssh root@192.168.128.10
-python3 - <<'PY'
-import os, pty, signal, sys, time
-def cleanup(s, f): sys.exit(0)
-signal.signal(signal.SIGTERM, cleanup)
-signal.signal(signal.SIGINT, cleanup)
-master, slave = pty.openpty()
-slave_path = os.ttyname(slave)
-link = '/tmp/crane_ttyS1'
-if os.path.islink(link) or os.path.exists(link):
-    os.remove(link)
-os.symlink(slave_path, link)
-print(f'PTY {link} -> {slave_path}', flush=True)
-os.close(slave)
-while True: time.sleep(1)
-PY
-
-# 2. 再开一个 SSH 窗口运行 main（把 serial.port 指向临时 PTY）
-ssh root@192.168.128.10
-cd /home/sunrise/Crane_WS
-sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
-python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
-```
-
-> 测试完成后记得杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
-
-## 数据集规范
-
-每个数据集目录应包含：
-
-- `images/train/` 和 `images/val/`
-- `labels/train/` 和 `labels/val/`，文件为 YOLO 格式 `.txt`（`class x_center y_center width height`，已归一化）
-- `dataset.yaml`（或 `<name>.yaml`），包含 `path`、`train`、`val`、`names`、`nc`
-
-现有数据集 YAML 使用 `path: .` 和 `train: .`，因此需要在该 YAML 所在目录下调用。新建数据集配置时，建议使用绝对路径或仓库根目录相对路径，以避免路径歧义。
-
-## 资产命名规范
-
-- `.pt`  – PyTorch 权重（YOLOv5 / Ultralytics 格式）
-- `.onnx` – x86 验证用 ONNX 导出
-- `.bin`  – RDKx5 部署用 BPU 二进制
-
-每个 `.bin` 基名都应配有一个部署配置 YAML（例如 `beans_v4_rdkx5_config.yaml`），包含 `imgsz`、`nc`、`names`、`reg_max`、`strides`。额外字段（如 `task`、`model`、`onnx`）不影响板端推理。
+- 数据集目录与 YAML 规范：[docs/reference/dataset_spec.md](docs/reference/dataset_spec.md)
+- 模型资产命名规范（.pt/.onnx/.bin）：[docs/reference/asset_naming.md](docs/reference/asset_naming.md)
 
 ## 视觉运行时映射规则
 
@@ -333,7 +89,7 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 - `C1-C3`：取货区 1–3 的豆子颜色（01=黄豆，02=绿豆，03=白芸豆）。
 - `N4-N8`：放置区 4–8 上的数字（01–05）。
 
-运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 `docs/vision_mapping.md`。
+运行 `python scripts/main_arm64.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。`--ui` 是默认校准模式的向后兼容别名。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
 
 ## 相机与模型配置字段
 
@@ -359,27 +115,7 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 
 ## 串口
 
-RDK X5 通过 40PIN 物理引脚 8/10 与下位机通信：
-
-| 物理引脚 | 功能 | 设备节点 |
-|---|---|---|
-| 8 | UART1_TXD | `/dev/ttyS1` |
-| 10 | UART1_RXD | `/dev/ttyS1` |
-
-下位机（STM32）侧使用 **USART6**，对应引脚：
-
-| STM32 引脚 | 功能 |
-|---|---|
-| PG9 | USART6_RX |
-| PG14 | USART6_TX |
-
-- 默认配置为 **921600 8/N/1**，无流控，IO 电压 3.3V。
-- `/dev/ttyS0` 是系统调试串口，不建议用于下位机通信。
-- 与下位机连接需要交叉接线：RDK TX（引脚 8）→ 下位机 RX（PG9），RDK RX（引脚 10）→ 下位机 TX（PG14），GND → GND。
-
-`scripts/main_arm64.py` 通过 `models/serial_port.open_serial_port()` 打开串口，参数来自 `configs/vision.yaml` 的 `serial` 段。`models/serial_port.py` 封装了 START 命令检测（`A5 5A 01`）和 12 字节结果帧发送（`A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`）。
-
-竞赛模式下，视觉端在收到 START 命令后才开始识别并以 5–10 Hz 重复发送结果帧；若连续 300 ms 未收到 START 命令，则停止回传。
+RDK X5 与下位机通过 `/dev/ttyS1` 通信，默认配置 **921600 8/N/1**。参数来自 `configs/vision.yaml` 的 `serial` 段。**不要使用 `/dev/ttyS0`**（系统调试串口）。硬件引脚、接线与协议细节见 [docs/runbooks/serial_port.md](docs/runbooks/serial_port.md)。
 
 ## 提交代码
 
@@ -411,3 +147,34 @@ Remove-Item .git-msg
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
 - `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 921600 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。
 - 在 x86 开发机上运行 `pytest test/` 时，测试模块会在顶部阻止 `ultralytics`/`torch` 导入，防止 pytest 收集阶段加载 PyTorch/CUDA 上下文导致内存暴涨。不要在测试文件顶部删除这些 `sys.modules[...] = None` 语句。
+
+## 开发行为准则（八荣八耻）
+
+| 序号 | 可耻行为（禁止） | 光荣行为（倡导） |
+|------|------------------|------------------|
+| 1 | 暗猜接口 | **认真查阅** — 文档、源码、现有实现 |
+| 2 | 模糊执行 | **寻求确认** — 对不明确的需求先确认再动手 |
+| 3 | 盲想业务 | **人类确认** — 关键业务逻辑与真人核对 |
+| 4 | 创造接口 | **复用现有** — 优先使用已有函数/模块/约定 |
+| 5 | 跳过验证 | **主动测试** — 改完必测，新增必验 |
+| 6 | 破坏架构 | **遵循规范** — 按项目结构和约定行事 |
+| 7 | 假装理解 | **诚实无知** — 不懂就说，不硬撑 |
+| 8 | 盲目修改 | **谨慎重构** — 看清影响面再改 |
+
+### 简化记忆版
+
+> **查、问、核、复、测、规、诚、慎**
+>
+> 1. **查**接口  2. **问**清楚  3. **核**业务  4. **复**现有  
+> 5. **测**改动  6. **规**架构  7. **诚**不知  8. **慎**重构
+
+## 更多参考文档
+
+- [docs/runbooks/commands.md](docs/runbooks/commands.md) — 完整命令清单
+- [docs/runbooks/serial_port.md](docs/runbooks/serial_port.md) — 串口硬件与协议
+- [docs/reference/dataset_spec.md](docs/reference/dataset_spec.md) — 数据集规范
+- [docs/reference/asset_naming.md](docs/reference/asset_naming.md) — 资产命名规范
+- [docs/reference/CRANE_VISION_PROTOCOL.md](docs/reference/CRANE_VISION_PROTOCOL.md) — 通信协议
+- [docs/guides/RDKx5_Bin_Inference.md](docs/guides/RDKx5_Bin_Inference.md) — YOLO11 BPU 板端工作流
+- [docs/guides/vision_runtime.md](docs/guides/vision_runtime.md) — 视觉运行时入口与状态机
+- [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md) — 分区映射与辅助线规则
