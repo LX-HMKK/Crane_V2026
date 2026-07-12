@@ -71,6 +71,18 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock
 python3 scripts/main_arm64.py --no-ui
 ```
 
+## RDK X5 连接与同步
+
+- 目标板：`root@192.168.128.10`，工作区 `/home/sunrise/Crane_WS`。
+- 增量同步：只传自上次提交以来变更的文件，**绝不覆盖 `assets/*.bin`** 等大型资产。
+
+```bash
+git diff --name-only HEAD
+scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
+```
+
+完整同步规则、无串口测试命令和看门狗用法见 [docs/runbooks/commands.md](docs/runbooks/commands.md)。
+
 ## 数据集与资产规范
 
 - 数据集目录与 YAML 规范：[docs/reference/dataset_spec.md](docs/reference/dataset_spec.md)
