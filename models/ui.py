@@ -7,14 +7,7 @@ import cv2
 import yaml
 from PIL import Image, ImageTk
 
-LINE_COLORS = {
-    "bean_left_x": (0, 255, 0),
-    "bean_right_x": (0, 255, 0),
-    "digit_x1": (255, 0, 0),
-    "digit_x2": (255, 0, 0),
-    "digit_x3": (255, 0, 0),
-    "digit_x4": (255, 0, 0),
-}
+from models.camera_viewer import CameraViewer, LINE_COLORS
 
 SLIDER_DEFS = {
     "bean": [
@@ -44,9 +37,10 @@ DEFAULT_UI_CFG = {
 }
 
 
-class CalibrationUI:
+class CalibrationUI(CameraViewer):
     """Tkinter-based calibration UI.
 
+    Extends CameraViewer with sliders, config saving and inference overlay.
     The control panel lives outside the video frame so buttons and sliders do
     not obscure the camera image.
     """
@@ -60,14 +54,12 @@ class CalibrationUI:
         digit_model=None,
         root=None,
     ):
-        self.cfg_path = cfg_path
-        self.cam_bean = cam_bean
-        self.cam_digit = cam_digit
+        super().__init__(None, cfg_path, cam_bean, cam_digit, root=root)
+        if not self._window_ok:
+            return
+
         self.bean_model = bean_model
         self.digit_model = digit_model
-        self.mode = "bean"
-        self._window_ok = True
-        self._running = False
 
         self._infer_queue = queue.Queue(maxsize=1)
         self._result_lock = threading.Lock()
@@ -76,119 +68,19 @@ class CalibrationUI:
         self._infer_thread = None
         self._save_pending = None
 
-        self._load_cfg()
-        self._apply_ui_cfg()
-        self._resolve_trackbar_limits()
-
-        if root is None:
-            try:
-                self.root = tk.Tk()
-            except tk.TclError as exc:
-                self._window_ok = False
-                logging.warning("Tkinter GUI unavailable: %s", exc)
-                return
-        else:
-            self.root = root
-
-        self._build_ui()
-
-    def _load_cfg(self):
-        with open(self.cfg_path, "r", encoding="utf-8") as f:
-            self.cfg = yaml.safe_load(f)
+        # Parent already created main_frame/video_container/video_label;
+        # add the control panel below the video area.
+        self._build_controls()
 
     def _apply_ui_cfg(self):
         """Merge UI config with defaults and pre-compute derived values."""
-        import copy
-
-        ui_cfg = copy.deepcopy(DEFAULT_UI_CFG)
-        if self.cfg and isinstance(self.cfg.get("ui"), dict):
-            ui_cfg["window"].update(self.cfg["ui"].get("window", {}))
-            ui_cfg["video"].update(self.cfg["ui"].get("video", {}))
-            ui_cfg["controls"].update(self.cfg["ui"].get("controls", {}))
-        self.ui_cfg = ui_cfg
-
-        win = ui_cfg["window"]
-        self.window_width = int(win["width"])
-        self.window_height = int(win["height"])
-        self.fullscreen = bool(win.get("fullscreen", False))
-
-        vid = ui_cfg["video"]
-        self.video_max_height = int(vid["max_height"])
-        self.video_fit_mode = str(vid.get("fit_mode", "fit_width"))
-
-        ctl = ui_cfg["controls"]
-        self.touch_mode = bool(ctl.get("touch_mode", False))
-        self.slider_width = int(ctl["slider_width"])
-        self.slider_height = int(ctl["slider_height"])
-        self.button_height = int(ctl["button_height"])
-        self.padding = int(ctl["padding"])
-        self.font_scale = float(ctl["font_scale"])
+        super()._apply_ui_cfg()
+        ctl = self.ui_cfg["controls"]
+        self.slider_width = int(ctl.get("slider_width", 16))
+        self.slider_height = int(ctl.get("slider_height", 32))
+        self.button_height = int(ctl.get("button_height", 16))
+        self.padding = int(ctl.get("padding", 1))
         self.inference_overlay = bool(ctl.get("inference_overlay", True))
-
-        self.display_w = self.window_width
-        self.display_h = self.video_max_height
-        self._configure_pending = None
-
-    def _compute_display_size(self, native_w, native_h, max_w=None, max_h=None):
-        """Return (display_w, display_h) that fits inside the given bounds.
-
-        The returned size always keeps the native aspect ratio and never
-        exceeds the available width or height.  When no bounds are supplied,
-        the configured window width and video max height are used.
-        """
-        if native_w <= 0 or native_h <= 0:
-            return max_w or self.window_width, max_h or self.video_max_height
-
-        max_w = max_w or self.window_width
-        max_h = max_h or self.video_max_height
-        aspect = native_h / native_w
-
-        # Try to fill the available width, then clamp by height if needed.
-        display_w = max_w
-        display_h = int(round(display_w * aspect))
-        if display_h > max_h:
-            display_h = max_h
-            display_w = int(round(display_h / aspect))
-
-        display_w = max(1, min(display_w, max_w))
-        display_h = max(1, min(display_h, max_h))
-        return display_w, display_h
-
-    def _resize_for_display(self, frame, max_w=None, max_h=None):
-        """Scale a native-resolution frame to the computed display size."""
-        display_w, display_h = self._compute_display_size(
-            frame.shape[1], frame.shape[0], max_w=max_w, max_h=max_h
-        )
-        if frame.shape[1] == display_w and frame.shape[0] == display_h:
-            return frame
-        return cv2.resize(frame, (display_w, display_h), interpolation=cv2.INTER_LINEAR)
-
-    def _on_configure(self, _event=None):
-        """Debounced handler for window resize events."""
-        if not self._window_ok or not self._running:
-            return
-        if self._configure_pending is not None:
-            self.root.after_cancel(self._configure_pending)
-        self._configure_pending = self.root.after(200, self._apply_geometry)
-
-    def _apply_geometry(self):
-        """Recompute display size when the window is resized.
-
-        Sliders are intentionally not recreated here; they are only rebuilt
-        when the camera mode changes. This keeps slider dragging smooth and
-        prevents flicker caused by repeated widget destruction/creation.
-        """
-        if not self._window_ok:
-            return
-        self.window_width = max(1, self.root.winfo_width())
-        self.window_height = max(1, self.root.winfo_height())
-
-    def _toggle_fullscreen(self, _event=None):
-        """Toggle fullscreen state, bound to the 'f' key for field debugging."""
-        if not self._window_ok:
-            return
-        self.fullscreen = not self.fullscreen
-        self.root.attributes("-fullscreen", self.fullscreen)
 
     def _save_cfg(self):
         with open(self.cfg_path, "w", encoding="utf-8") as f:
@@ -260,67 +152,9 @@ class CalibrationUI:
             except queue.Full:
                 pass
 
-    @staticmethod
-    def _camera_resolution(cam, default_w=640, default_h=480):
-        w = getattr(cam, "width", None)
-        h = getattr(cam, "height", None)
-        w = int(w) if w is not None and int(w) > 0 else default_w
-        h = int(h) if h is not None and int(h) > 0 else default_h
-        return w, h
-
-    def _resolve_trackbar_limits(self):
-        bean_w, bean_h = self._camera_resolution(self.cam_bean)
-        digit_w, digit_h = self._camera_resolution(self.cam_digit)
-        self.max_x = max(bean_w, digit_w)
-        self.max_y = max(bean_h, digit_h)
-
-    def _build_ui(self):
-        # Opt-in to per-monitor DPI awareness on Windows so that window and
-        # widget dimensions map 1:1 to physical pixels on high-DPI screens.
-        try:
-            import ctypes
-
-            ctypes.windll.user32.SetProcessDpiAwarenessContext(-4)
-        except Exception:
-            pass
-
-        self.root.title("Crane Vision Calibration")
-        self.root.protocol("WM_DELETE_WINDOW", self._quit)
-        self.root.bind("<KeyPress-1>", lambda _event: self._set_mode("bean"))
-        self.root.bind("<KeyPress-2>", lambda _event: self._set_mode("digit"))
-        self.root.bind("<Escape>", lambda _event: self._quit())
-        self.root.bind("<KeyPress-f>", self._toggle_fullscreen)
-        self.root.bind("<Configure>", self._on_configure)
-
-        if self.fullscreen:
-            self.root.attributes("-fullscreen", True)
-        else:
-            self.root.geometry(f"{self.window_width}x{self.window_height}")
-            self.root.minsize(640, 480)
-
-        # Use a grid so the video area expands to fill leftover space while the
-        # control panel keeps its natural height and is always visible.
-        self.root.grid_rowconfigure(0, weight=1)
-        self.root.grid_columnconfigure(0, weight=1)
-
-        main_frame = tk.Frame(self.root)
-        main_frame.grid(row=0, column=0, sticky="nsew")
-        main_frame.grid_rowconfigure(0, weight=1)  # video expands
-        main_frame.grid_rowconfigure(1, weight=0)  # controls fixed
-        main_frame.grid_columnconfigure(0, weight=1)
-
-        # The video container fills the top cell.  The label inside it keeps the
-        # image at its natural size and centers it; empty space shows as black.
-        video_container = tk.Frame(main_frame, bg="black")
-        video_container.grid(row=0, column=0, sticky="nsew")
-        video_container.grid_rowconfigure(0, weight=1)
-        video_container.grid_columnconfigure(0, weight=1)
-
-        self.video_label = tk.Label(video_container, bg="black")
-        self.video_label.grid(row=0, column=0)
-        self._video_container = video_container
-
-        control_frame = tk.Frame(main_frame)
+    def _build_controls(self):
+        """Add control panel below the video area created by CameraViewer."""
+        control_frame = tk.Frame(self._video_container.master)
         control_frame.grid(row=1, column=0, sticky="ew")
         self._control_frame = control_frame
 
@@ -413,7 +247,7 @@ class CalibrationUI:
     def _set_mode(self, mode):
         if mode == self.mode:
             return
-        self.mode = mode
+        super()._set_mode(mode)
         # Clear stale detection results so the new view doesn't briefly show
         # overlay from a previous calibration session.
         with self._result_lock:
@@ -440,19 +274,6 @@ class CalibrationUI:
             except Exception:
                 pass
         self._save_pending = self.root.after(300, self._save_cfg)
-
-    def _draw_bean_lines(self, frame):
-        h, w = frame.shape[:2]
-        left = self.cfg["lines"]["bean"]["left_x"]
-        right = self.cfg["lines"]["bean"]["right_x"]
-        cv2.line(frame, (left, 0), (left, h), LINE_COLORS["bean_left_x"], 2)
-        cv2.line(frame, (right, 0), (right, h), LINE_COLORS["bean_right_x"], 2)
-
-    def _draw_digit_lines(self, frame):
-        h = frame.shape[0]
-        for key in ("x1", "x2", "x3", "x4"):
-            x = self.cfg["lines"]["digit"][key]
-            cv2.line(frame, (x, 0), (x, h), LINE_COLORS[f"digit_{key}"], 2)
 
     @staticmethod
     def _class_name(names, cls_id):
@@ -537,10 +358,6 @@ class CalibrationUI:
 
         if self._running:
             self.root.after(30, self._update_frame)
-
-    def _quit(self):
-        self._running = False
-        self.root.destroy()
 
     def run(self):
         if not self._window_ok:

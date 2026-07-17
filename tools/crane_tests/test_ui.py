@@ -74,6 +74,14 @@ def _mock_tkinter_and_pil(monkeypatch):
         m.winfo_children.return_value = []
         return m
 
+    # CameraViewer (base class) imports tk under its own module.
+    monkeypatch.setattr("models.camera_viewer.tk.Tk", MagicMock)
+    monkeypatch.setattr("models.camera_viewer.tk.Frame", _widget_mock)
+    monkeypatch.setattr("models.camera_viewer.tk.Label", _widget_mock)
+    monkeypatch.setattr("models.camera_viewer.ImageTk.PhotoImage", MagicMock)
+    monkeypatch.setattr("models.camera_viewer.Image.fromarray", MagicMock)
+
+    # CalibrationUI still creates control widgets via its own tk import.
     monkeypatch.setattr("models.ui.tk.Tk", MagicMock)
     monkeypatch.setattr("models.ui.tk.Frame", _widget_mock)
     monkeypatch.setattr("models.ui.tk.Label", _widget_mock)
@@ -182,7 +190,7 @@ def test_init_window_headless_fallback(tmp_path, monkeypatch):
     def raise_tcl_error(*args, **kwargs):
         raise tk.TclError("no display name")
 
-    monkeypatch.setattr("models.ui.tk.Tk", raise_tcl_error)
+    monkeypatch.setattr("models.camera_viewer.tk.Tk", raise_tcl_error)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert ui._window_ok is False
 
