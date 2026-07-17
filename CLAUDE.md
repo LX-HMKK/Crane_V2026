@@ -75,6 +75,12 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-
 
 # 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py
+
+# 独立功能测试（x86 / RDK X5 均可运行）
+python test/test_camera_view.py           # 只测相机画面与摆放
+python test/test_inference_ui.py          # 加载模型，叠加检测框，无串口
+python test/test_serial_loopback.py --mode loopback   # TX-RX 短接回环
+python test/test_serial_loopback.py --mode protocol   # 接真实下位机
 ```
 
 ## RDK X5 连接与同步
@@ -156,6 +162,11 @@ Remove-Item .git-msg
 ### 协作者
 
 **禁止在提交信息中添加 `Co-Authored-By` 尾注或设置任何协作者。** 所有提交只记录实际执行该提交的作者。
+
+## 测试入口约定
+
+- `tools/crane_tests/`：模块级单元测试，由 `pytest tools/crane_tests/ -v` 驱动，全部使用 mock，可在 x86 上运行。
+- `test/`：独立功能测试脚本，直接 `python test/xxx.py` 运行，可能依赖真实相机/串口/BPU，按脚本用途选择运行环境。
 
 ## 重要注意事项
 
