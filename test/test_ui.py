@@ -54,6 +54,11 @@ def _write_full_cfg(tmp_path):
                 "cfg": str(tmp_path / "digit.yaml"),
             },
         },
+        "serial": {
+            "port": "/dev/ttyTEST",
+            "baudrate": 115200,
+            "timeout": 0.05,
+        },
     }
     with open(cfg_path, "w", encoding="utf-8") as f:
         yaml.dump(cfg, f)
@@ -347,10 +352,43 @@ def test_run_calibration_uses_empty_frame_when_camera_missing(
     mock_ui_class = MagicMock()
     monkeypatch.setattr("scripts.main_arm64.CalibrationUI", mock_ui_class)
 
+    fake_port = MagicMock()
+    monkeypatch.setattr(
+        "scripts.main_arm64.open_serial_port", lambda *a, **k: fake_port
+    )
+
     run_calibration(cfg, str(cfg_path), mock=False)
 
     assert mock_ui_class.called
     mock_ui_class.return_value.run.assert_called_once()
+    fake_port.close.assert_called_once()
+
+
+def test_run_calibration_opens_serial_port_by_default(tmp_path, monkeypatch):
+    cfg_path = _write_full_cfg(tmp_path)
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+
+    def raise_runtime_error(*args, **kwargs):
+        raise RuntimeError("camera unavailable")
+
+    monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
+    monkeypatch.setattr("scripts.main_arm64.CalibrationUI", MagicMock())
+
+    opened = {}
+
+    def fake_open_serial_port(port, baudrate, timeout=0.05):
+        opened["port"] = port
+        opened["baudrate"] = baudrate
+        opened["timeout"] = timeout
+        return MagicMock()
+
+    monkeypatch.setattr("scripts.main_arm64.open_serial_port", fake_open_serial_port)
+
+    run_calibration(cfg, str(cfg_path), mock=False)
+
+    assert opened["port"] == "/dev/ttyTEST"
+    assert opened["baudrate"] == 115200
+    assert opened["timeout"] == 0.05
 
 
 def _write_cfg_with_ui(tmp_path, ui_cfg=None):

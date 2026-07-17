@@ -50,6 +50,7 @@ def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None
             cfg["cameras"]["digit"], mock=mock, fallback_empty=True
         )
 
+    port = None
     try:
         bean_model = None
         digit_model = None
@@ -57,6 +58,23 @@ def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None
             bean_model, digit_model = load_models(cfg)
         except EnvironmentError:
             logging.warning("BPU not available; running UI in camera-only mode")
+
+        serial_cfg = cfg.get("serial")
+        if serial_cfg:
+            port = open_serial_port(
+                serial_cfg["port"],
+                serial_cfg["baudrate"],
+                timeout=serial_cfg.get("timeout", 0.05),
+            )
+            logging.info(
+                "Serial port opened for calibration: %s @ %s",
+                serial_cfg["port"],
+                serial_cfg["baudrate"],
+            )
+        else:
+            logging.warning(
+                "No serial configuration found; running UI without serial port"
+            )
 
         ui = CalibrationUI(
             cfg_path,
@@ -67,6 +85,8 @@ def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None
         )
         ui.run()
     finally:
+        if port is not None:
+            port.close()
         release_cameras(cam_bean, cam_digit)
 
 

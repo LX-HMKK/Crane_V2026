@@ -97,7 +97,7 @@ python3 scripts/main_arm64.py --config /path/to/vision.yaml
 
 当前未接 STM32 串口时，仍可用以下方式验证 `main_arm64.py` 在板端能正常加载模型、读取双摄像头并进入主循环。
 
-#### 带 UI 的校准预览（默认即 UI，不打开串口）
+#### 带 UI 的校准预览（默认即 UI，会打开串口）
 
 ```bash
 ssh root@192.168.128.10
@@ -108,6 +108,7 @@ python3 scripts/main_arm64.py
 按 `1` / `2` 切换豆子/数字相机，按 `ESC` 退出；辅助线位置自动保存到 `configs/vision.yaml`。
 
 > 需要 RDK X5 接显示器，或 SSH 带 X11 转发（Windows 先开 X server，再用 `ssh -X root@192.168.128.10`）。
+> 若未接 STM32 串口，可临时注释掉 `configs/vision.yaml` 中的 `serial` 段，或将其 `port` 指向 PTY。
 
 #### 无 UI 竞赛主循环（用 PTY 替代串口）
 
