@@ -1,13 +1,13 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 import yaml
 
 
 def test_vision_yaml_exists_and_parses():
-    cfg_path = Path(__file__).parent.parent / "configs" / "vision.yaml"
+    cfg_path = Path(__file__).parent.parent.parent / "configs" / "vision.yaml"
     assert cfg_path.exists(), "configs/vision.yaml must exist"
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
@@ -19,5 +19,5 @@ def test_vision_yaml_exists_and_parses():
 
 
 def test_models_package_exists():
-    init_path = Path(__file__).parent.parent / "models" / "__init__.py"
+    init_path = Path(__file__).parent.parent.parent / "models" / "__init__.py"
     assert init_path.exists(), "models/__init__.py must exist"

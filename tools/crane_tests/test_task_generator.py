@@ -1,7 +1,7 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from models.mapping import DEFAULT_BEAN_TO_DIGIT, bean_name_to_digit
 from models.task_generator import TaskGenerator

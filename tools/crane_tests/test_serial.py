@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 from unittest import mock
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Keep this module independent of the heavy inference dependencies.
 sys.modules["ultralytics"] = None
