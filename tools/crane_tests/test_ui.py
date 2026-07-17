@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 from models.camera import MockCamera
 from models.ui import CalibrationUI
-from scripts.main_arm64 import run_calibration
+from scripts.calibrate import run_calibration
 
 
 def _write_cfg(tmp_path, values=None):
@@ -358,11 +358,11 @@ def test_run_calibration_uses_empty_frame_when_camera_missing(
     monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
 
     mock_ui_class = MagicMock()
-    monkeypatch.setattr("scripts.main_arm64.CalibrationUI", mock_ui_class)
+    monkeypatch.setattr("scripts.calibrate.CalibrationUI", mock_ui_class)
 
     fake_port = MagicMock()
     monkeypatch.setattr(
-        "scripts.main_arm64.open_serial_port", lambda *a, **k: fake_port
+        "scripts.calibrate.open_serial_port", lambda *a, **k: fake_port
     )
 
     run_calibration(cfg, str(cfg_path), mock=False)
@@ -380,7 +380,7 @@ def test_run_calibration_opens_serial_port_by_default(tmp_path, monkeypatch):
         raise RuntimeError("camera unavailable")
 
     monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
-    monkeypatch.setattr("scripts.main_arm64.CalibrationUI", MagicMock())
+    monkeypatch.setattr("scripts.calibrate.CalibrationUI", MagicMock())
 
     opened = {}
 
@@ -390,7 +390,7 @@ def test_run_calibration_opens_serial_port_by_default(tmp_path, monkeypatch):
         opened["timeout"] = timeout
         return MagicMock()
 
-    monkeypatch.setattr("scripts.main_arm64.open_serial_port", fake_open_serial_port)
+    monkeypatch.setattr("scripts.calibrate.open_serial_port", fake_open_serial_port)
 
     run_calibration(cfg, str(cfg_path), mock=False)
 
