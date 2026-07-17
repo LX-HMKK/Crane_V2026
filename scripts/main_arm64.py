@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crane vision runtime entry point for RDK X5 (ARM64)."""
+"""Crane vision competition runtime entry point for RDK X5 (ARM64)."""
 
 import argparse
 import logging
@@ -7,16 +7,13 @@ import sys
 import time
 from pathlib import Path
 
-# Add repo root to path so scripts/ can import models/
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.camera import StaticImageCamera
 from models.runtime import (
     ROOT as RUNTIME_ROOT,
     create_task_generator,
     init_logging,
-    list_cameras,
     load_models,
     load_vision_cfg,
     open_camera,
@@ -24,70 +21,7 @@ from models.runtime import (
     scan_once_dets,
     warmup_models,
 )
-from models.serial_port import SerialPort, open_serial_port
-from models.ui import CalibrationUI
-
-
-def _open_image_camera(image_path, camera_cfg):
-    """Open a StaticImageCamera for offline file-based testing."""
-    return StaticImageCamera(
-        image_path, camera_cfg["width"], camera_cfg["height"]
-    )
-
-
-def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None):
-    if bean_image is not None:
-        cam_bean = _open_image_camera(bean_image, cfg["cameras"]["bean"])
-    else:
-        cam_bean = open_camera(
-            cfg["cameras"]["bean"], mock=mock, fallback_empty=True
-        )
-
-    if digit_image is not None:
-        cam_digit = _open_image_camera(digit_image, cfg["cameras"]["digit"])
-    else:
-        cam_digit = open_camera(
-            cfg["cameras"]["digit"], mock=mock, fallback_empty=True
-        )
-
-    port = None
-    try:
-        bean_model = None
-        digit_model = None
-        try:
-            bean_model, digit_model = load_models(cfg)
-        except EnvironmentError:
-            logging.warning("BPU not available; running UI in camera-only mode")
-
-        serial_cfg = cfg.get("serial")
-        if serial_cfg:
-            port = open_serial_port(
-                serial_cfg["port"],
-                serial_cfg["baudrate"],
-                timeout=serial_cfg.get("timeout", 0.05),
-            )
-            logging.info(
-                "Serial port opened for calibration: %s @ %s",
-                serial_cfg["port"],
-                serial_cfg["baudrate"],
-            )
-        else:
-            logging.warning(
-                "No serial configuration found; running UI without serial port"
-            )
-
-        ui = CalibrationUI(
-            cfg_path,
-            cam_bean,
-            cam_digit,
-            bean_model,
-            digit_model,
-        )
-        ui.run()
-    finally:
-        if port is not None:
-            port.close()
-        release_cameras(cam_bean, cam_digit)
+from models.serial_port import open_serial_port
 
 
 def _scan_for_frame(cam_bean, cam_digit, bean_model, digit_model, task_gen, cfg):
@@ -127,8 +61,6 @@ def run_competition(cfg):
     init_logging()
     logging.info("Starting crane vision in competition mode (ARM64)")
 
-    # Open cameras and models before acquiring the serial handle.
-    # Use an outer try/finally so cameras are released even if model load fails.
     cam_bean = open_camera(cfg["cameras"]["bean"])
     cam_digit = open_camera(cfg["cameras"]["digit"])
     try:
@@ -215,59 +147,25 @@ def run_competition(cfg):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Crane vision runtime for RDK X5")
+    parser = argparse.ArgumentParser(
+        description="Crane vision competition runtime for RDK X5"
+    )
     parser.add_argument(
         "--config",
         default=str(RUNTIME_ROOT / "configs" / "vision.yaml"),
         help="Path to vision.yaml",
     )
-
-    ui_group = parser.add_mutually_exclusive_group()
-    ui_group.add_argument(
-        "--ui",
-        action="store_true",
-        help="Run calibration UI (default behavior, backward-compatible alias)",
-    )
-    ui_group.add_argument(
-        "--no-ui",
-        action="store_true",
-        help="Run competition mode",
-    )
-
-    parser.add_argument("--list-cameras", action="store_true", help="List available cameras")
     parser.add_argument(
-        "--mock-cameras",
+        "--verbose",
+        "-v",
         action="store_true",
-        help="Use synthetic cameras for UI testing",
-    )
-    parser.add_argument(
-        "--bean-image",
-        help="Path to a static bean camera image (overrides real/mock camera)",
-    )
-    parser.add_argument(
-        "--digit-image",
-        help="Path to a static digit camera image (overrides real/mock camera)",
+        help="Enable debug logging",
     )
     args = parser.parse_args()
 
-    init_logging()
-
-    if args.list_cameras:
-        list_cameras()
-        return
-
+    init_logging(debug=args.verbose)
     cfg = load_vision_cfg(args.config)
-
-    if args.no_ui:
-        run_competition(cfg)
-    else:
-        run_calibration(
-            cfg,
-            args.config,
-            mock=args.mock_cameras,
-            bean_image=args.bean_image,
-            digit_image=args.digit_image,
-        )
+    run_competition(cfg)
 
 
 if __name__ == "__main__":
