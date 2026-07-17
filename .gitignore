@@ -2,5 +2,8 @@ data/*
 !data/.gitkeep
 tools/onnx/*
 .worktrees/
-*/__pycache__/*
+__pycache__/
+*.py[cod]
+*$py.class
+.git-msg
 .claude/
