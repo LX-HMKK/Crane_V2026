@@ -25,27 +25,33 @@ conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https
 ### 运行单元测试
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/ -v
 ```
 
 ## 视觉运行时命令
 
-这些命令用于操作 RDK X5 竞赛运行时。`--ui` 校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
+这些命令用于操作 RDK X5 竞赛运行时。校准视图和单元测试可在 x86 上运行，但完整 BPU 推理需要 RDK X5 板端的 `hobot_dnn`。
+
+### 运行竞赛模式（仅限 RDK X5）
+
+```bash
+python3 scripts/main_arm64.py
+```
+
+`main_arm64.py` 现在只负责竞赛模式主循环：等待串口 START 命令、扫描两路相机、向下位机发送 12 字节结果帧。
 
 ### 使用实时预览校准辅助线
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py
+conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py
 ```
 
-按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。
-
-> `--ui` 仍可作为默认校准模式的向后兼容别名使用。在没有相机的 x86 开发机上，可配合 `--mock-cameras` 预览校准 UI。
+按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。在没有相机的 x86 开发机上，可配合 `--mock-cameras` 预览校准 UI。
 
 ### 无相机测试校准 UI
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock-cameras
+conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-cameras
 ```
 
 使用合成帧启动校准 UI，用于无相机环境下的 UI 开发与辅助线布局测试。按 `ESC` 保存的辅助线位置同样写回 `configs/vision.yaml`。
@@ -53,13 +59,35 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --mock
 ### 列出可用相机
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_arm64.py --list-cameras
+conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --list-cameras
 ```
 
-### 运行竞赛模式（仅限 RDK X5）
+### 独立功能测试脚本
+
+#### 双相机画面检查（无模型、无串口）
 
 ```bash
-python3 scripts/main_arm64.py --no-ui
+conda run --prefix /d/conda_envs/crane-clean python test/test_camera_view.py
+```
+
+仅显示两路相机画面和辅助线，按 `1` / `2` 切换视图。适合机械安装后确认相机位置和辅助线分区。
+
+#### 双相机推理检查（加载 BPU 模型，无串口）
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python test/test_inference_ui.py
+```
+
+加载豆子/数字 BPU 模型，在画面上叠加检测框与分区编号，验证模型输出与辅助线分区是否匹配。
+
+#### 串口回环/协议测试
+
+```bash
+# TX-RX 短接的回环测试
+conda run --prefix /d/conda_envs/crane-clean python test/test_serial_loopback.py --mode loopback --count 100
+
+# 使用 SerialPort 发送结果帧并等待 START
+conda run --prefix /d/conda_envs/crane-clean python test/test_serial_loopback.py --mode protocol --count 10
 ```
 
 ### 自动重启竞赛模式
@@ -150,7 +178,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 ## RDKx5 板端推理
 
-完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口为 `scripts/main_arm64.py`；部署时需把 `models/`、`scripts/`、`configs/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/main_arm64.py` 进行校准，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
+完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口包括 `scripts/main_arm64.py`（竞赛模式）、`scripts/calibrate.py`（校准）、`test/test_camera_view.py`、`test/test_inference_ui.py`、`test/test_serial_loopback.py`（独立测试）；部署时需把 `models/`、`scripts/`、`configs/`、`test/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/calibrate.py` 进行校准，使用 `python3 scripts/main_arm64.py` 运行竞赛模式，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
 - `hobot_dnn` 实际使用 `from hobot_dnn import pyeasy_dnn as dnn`，并回退到旧的 `import hobot_dnn as dnn`；仅在 RDKx5 镜像中可用。
 - 输入：模型元数据报告为 RGB NCHW `uint8` 张量，形状 `1×3×640×640`，但 `tensor_type` 为 `NV12`；运行时内部把 RGB NCHW 转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再喂给 BPU。归一化（`/255`）已编译进模型。
@@ -172,28 +200,49 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
    ```bash
    scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
-   scp models/ui.py root@192.168.128.10:/home/sunrise/Crane_WS/models/
+   scp scripts/calibrate.py root@192.168.128.10:/home/sunrise/Crane_WS/scripts/
+   scp test/test_serial_loopback.py root@192.168.128.10:/home/sunrise/Crane_WS/test/
    ```
 
 3. 若新增文件或目录，同样用 `scp -r` 或先 `ssh` 到板端创建目录后再复制。
 
 > **规则：** 绝不覆盖 `assets/*.bin` 等大型资产，除非本次提交确实更新了模型；同步前先 `git diff --name-only HEAD` 确认变更范围。
 
-## 在 RDK X5 上测试 main（不接串口）
+## 在 RDK X5 上测试入口脚本（不接串口）
 
-### 1. 带 UI 的校准预览
+### 1. 校准预览
 
 ```bash
 ssh root@192.168.128.10
 cd /home/sunrise/Crane_WS
-python3 scripts/main_arm64.py
+python3 scripts/calibrate.py
 ```
 
-默认即校准 UI，会按 `configs/vision.yaml` 的 `serial` 段打开串口。若未接串口，可临时注释掉 `serial` 段或改用 PTY。按 `1` / `2` 切换豆子/数字相机视图，拖动面板上的滑块调整辅助线，按 `ESC` 退出，位置自动保存到 `configs/vision.yaml`。
+`calibrate.py` 会按 `configs/vision.yaml` 的 `serial` 段打开串口。若未接串口，可临时注释掉 `serial` 段或改用 PTY。按 `1` / `2` 切换豆子/数字相机视图，拖动面板上的滑块调整辅助线，按 `ESC` 退出，位置自动保存到 `configs/vision.yaml`。
 
 > 需要 RDK X5 已接显示器，或 SSH 带 X11 转发。Windows 上先开启 X server（如 VcXsrv / MobaXterm），再用 `ssh -X root@192.168.128.10`。
 
-### 2. 无 UI 单帧扫描验证
+### 2. 双相机画面检查
+
+```bash
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+python3 test/test_camera_view.py
+```
+
+无模型、无串口、无滑块，仅确认相机画面和辅助线分区。
+
+### 3. 双相机推理检查
+
+```bash
+ssh root@192.168.128.10
+cd /home/sunrise/Crane_WS
+python3 test/test_inference_ui.py
+```
+
+加载 BPU 模型并叠加检测框，不打开串口，适合验证模型输出。
+
+### 4. 无 UI 单帧扫描验证
 
 ```bash
 ssh root@192.168.128.10
@@ -223,9 +272,9 @@ cam_bean.release(); cam_digit.release()
 PY
 ```
 
-### 3. 无串口测试竞赛主循环
+### 5. 无串口测试竞赛主循环
 
-可用临时 PTY 替代 `/dev/ttyS1`，验证 `--no-ui` 能正常加载模型并进入等待 START 状态：
+可用临时 PTY 替代 `/dev/ttyS1`，验证 `main_arm64.py` 能正常加载模型并进入等待 START 状态：
 
 ```bash
 # 1. 在 RDK X5 上先创建虚拟串口
@@ -250,7 +299,7 @@ PY
 ssh root@192.168.128.10
 cd /home/sunrise/Crane_WS
 sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
-python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
+python3 scripts/main_arm64.py --config /tmp/crane_vision.yaml
 ```
 
 > 测试完成后记得杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
