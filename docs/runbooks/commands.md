@@ -43,7 +43,7 @@ python3 scripts/main_arm64.py
 ### 使用实时预览校准辅助线
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py
+conda run --prefix /d/conda_envs/crane-clean python test/calibrate.py
 ```
 
 按 `1` / `2` 切换豆子/数字相机视图，通过控制面板滑块调整辅助线，按 `ESC` 保存到 `configs/vision.yaml`。在没有相机的 x86 开发机上，可配合 `--mock-cameras` 预览校准 UI。
@@ -51,7 +51,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py
 ### 无相机测试校准 UI
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-cameras
+conda run --prefix /d/conda_envs/crane-clean python test/calibrate.py --mock-cameras
 ```
 
 使用合成帧启动校准 UI，用于无相机环境下的 UI 开发与辅助线布局测试。按 `ESC` 保存的辅助线位置同样写回 `configs/vision.yaml`。
@@ -59,7 +59,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-
 ### 列出可用相机
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --list-cameras
+conda run --prefix /d/conda_envs/crane-clean python test/calibrate.py --list-cameras
 ```
 
 ### 独立功能测试脚本
@@ -178,7 +178,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
 ## RDKx5 板端推理
 
-完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口包括 `scripts/main_arm64.py`（竞赛模式）、`scripts/calibrate.py`（校准）、`test/test_camera_view.py`、`test/test_inference_ui.py`、`test/test_serial_loopback.py`（独立测试）；部署时需把 `models/`、`scripts/`、`configs/`、`test/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 scripts/calibrate.py` 进行校准，使用 `python3 scripts/main_arm64.py` 运行竞赛模式，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
+完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口包括 `scripts/main_arm64.py`（竞赛模式）、`test/calibrate.py`（校准）、`test/test_camera_view.py`、`test/test_inference_ui.py`、`test/test_serial_loopback.py`（独立测试）；部署时需把 `models/`、`scripts/`、`configs/`、`test/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。使用 `python3 test/calibrate.py` 进行校准，使用 `python3 scripts/main_arm64.py` 运行竞赛模式，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
 
 - `hobot_dnn` 实际使用 `from hobot_dnn import pyeasy_dnn as dnn`，并回退到旧的 `import hobot_dnn as dnn`；仅在 RDKx5 镜像中可用。
 - 输入：模型元数据报告为 RGB NCHW `uint8` 张量，形状 `1×3×640×640`，但 `tensor_type` 为 `NV12`；运行时内部把 RGB NCHW 转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再喂给 BPU。归一化（`/255`）已编译进模型。
@@ -200,7 +200,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 
    ```bash
    scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
-   scp scripts/calibrate.py root@192.168.128.10:/home/sunrise/Crane_WS/scripts/
+   scp test/calibrate.py root@192.168.128.10:/home/sunrise/Crane_WS/scripts/
    scp test/test_serial_loopback.py root@192.168.128.10:/home/sunrise/Crane_WS/test/
    ```
 
@@ -215,7 +215,7 @@ python -m pytest tools/yolov5/tests/test_invariant_export.py -v
 ```bash
 ssh root@192.168.128.10
 cd /home/sunrise/Crane_WS
-python3 scripts/calibrate.py
+python3 test/calibrate.py
 ```
 
 `calibrate.py` 会按 `configs/vision.yaml` 的 `serial` 段打开串口。若未接串口，可临时注释掉 `serial` 段或改用 PTY。按 `1` / `2` 切换豆子/数字相机视图，拖动面板上的滑块调整辅助线，按 `ESC` 退出，位置自动保存到 `configs/vision.yaml`。

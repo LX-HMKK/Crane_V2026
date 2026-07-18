@@ -42,15 +42,15 @@ models/            # 视觉运行时源码
                    #   serial_port.py, task_generator.py, mapping.py, ui.py
 scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 竞赛模式入口
-                   #   calibrate.py  – 校准 UI 入口
                    #   main_amd64.py – x86 本机完整流程测试入口
-                   #   send_test_frame.py – 串口测试帧发送工具
                    #   watchdog.sh – main_arm64.py 自动重启脚本
                    #   .gitkeep
 test/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
-                   #   test_camera_view.py      – 双相机画面检查
-                   #   test_inference_ui.py     – 双相机推理检查
-                   #   test_serial_loopback.py  – 串口回环/协议测试
+                   #   calibrate.py           – 校准 UI 入口
+                   #   send_test_frame.py     – 串口测试帧发送工具
+                   #   test_camera_view.py    – 双相机画面检查
+                   #   test_inference_ui.py   – 双相机推理检查
+                   #   test_serial_loopback.py – 串口回环/协议测试
 requirements.txt   # 运行时/测试依赖
 README.md          # 项目概览（侧重视觉模块）
 tools/yolov5/      # 内嵌 YOLOv5 仓库（train.py、detect.py、val.py、export.py 等）
@@ -71,7 +71,7 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/ -v
 
 # 校准辅助线
-conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-cameras
+conda run --prefix /d/conda_envs/crane-clean python test/calibrate.py --mock-cameras
 
 # 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py
@@ -113,14 +113,14 @@ scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
 - `C1-C3`：取货区 1–3 的豆子颜色（01=黄豆，02=绿豆，03=白芸豆）。
 - `N4-N8`：放置区 4–8 上的数字（01–05）。
 
-运行 `python scripts/calibrate.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
+运行 `python test/calibrate.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
 
 ## 相机与模型配置字段
 
 `configs/vision.yaml` 中除辅助线外，还经常需要调整以下字段：
 
 - `cameras.bean` / `cameras.digit`：
-  - `device`：V4L2 设备节点，可用 `scripts/calibrate.py --list-cameras` 列出。
+  - `device`：V4L2 设备节点，可用 `test/calibrate.py --list-cameras` 列出。
   - `width` / `height`：捕获分辨率。
   - `fps`：请求摄像头帧率（例如 `15`），实际帧率以设备返回为准。
   - `buffer_size`：OpenCV 内部缓冲，竞赛模式建议设为 `1` 降低延迟。
@@ -170,7 +170,7 @@ Remove-Item .git-msg
 
 ## 重要注意事项
 
-- `main_arm64.py` 仅用于竞赛模式；校准请使用 `scripts/calibrate.py`，双相机画面检查请使用 `test/test_camera_view.py`，推理检查请使用 `test/test_inference_ui.py`，串口测试请使用 `test/test_serial_loopback.py`。
+- `main_arm64.py` 仅用于竞赛模式；校准请使用 `test/calibrate.py`，双相机画面检查请使用 `test/test_camera_view.py`，推理检查请使用 `test/test_inference_ui.py`，串口测试请使用 `test/test_serial_loopback.py`。
 - 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`calibrate.py`、`test_camera_view.py`、`test_inference_ui.py`、`main_amd64.py` 和单元测试可在 x86 上安全运行。
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
