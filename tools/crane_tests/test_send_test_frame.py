@@ -3,7 +3,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "test"))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "tests"))
 
 sys.modules["ultralytics"] = None
 sys.modules["torch"] = None

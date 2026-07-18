@@ -30,7 +30,7 @@ scripts/
   main_arm64.py                  # RDK X5 部署入口（竞赛 + 校准）
   main_amd64.py                  # x86 本机完整流程测试入口（无串口，使用 .pt）
   watchdog.sh                    # 开机自启动 / 崩溃重启
-test/                            # x86 可测单元测试
+tests/                            # x86 可测单元测试
 ```
 
 ## 快速开始
@@ -52,7 +52,7 @@ conda run --prefix /d/conda_envs/crane-clean pip install --no-cache-dir -i https
 ### x86 测试
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest tests/ -v
 ```
 
 ### x86 完整流程测试（无串口）
@@ -73,7 +73,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 
 ### 板端使用
 
-1. 把 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 拷贝到 RDKx5。
+1. 把 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 拷贝到 RDKx5。
 2. 上电校准：
    ```bash
    python3 scripts/main_arm64.py

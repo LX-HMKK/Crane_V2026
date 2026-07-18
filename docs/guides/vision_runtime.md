@@ -64,7 +64,7 @@ x86 主机没有 `hobot_dnn`，但 `main_amd64.py` 可以通过 `ultralytics` �
 
 ```bash
 # 全量单元测试（无需 hobot_dnn / ultralytics）
-conda run --prefix /d/conda_envs/crane-clean python -m pytest test/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest tests/ -v
 
 # 交互式预览：按 SPACE / s 扫描，ESC 退出（需要 ultralytics）
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
@@ -77,7 +77,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 
 ## 部署清单
 
-1. 将 `models/`、`scripts/`、`configs/`、`test/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。
+1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。
 2. 上电后先运行 `python3 scripts/main_arm64.py` 校准辅助线。
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。

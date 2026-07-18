@@ -1,22 +1,22 @@
 # Crane Vision 测试与入口解耦设计
 
 **日期：** 2026-07-17  
-**状态：** 已实现（2026-07-18 调整：校准入口 `calibrate.py` 与 `send_test_frame.py` 最终放在 `test/` 而非 `scripts/`，以避免生产入口与测试入口混淆。）  
-**关联需求：** 用户反馈：`main_arm64.py` 功能堆砌，`test/` 被滥用为模块测试目录，需要独立的完整功能测试入口。
+**状态：** 已实现（2026-07-18 调整：校准入口 `calibrate.py` 与 `send_test_frame.py` 最终放在 `tests/` 而非 `scripts/`，以避免生产入口与测试入口混淆。）  
+**关联需求：** 用户反馈：`main_arm64.py` 功能堆砌，`tests/` 被滥用为模块测试目录，需要独立的完整功能测试入口。
 
 ## 1. 背景与问题
 
 当前代码存在以下问题：
 
 - `scripts/main_arm64.py` 同时承担**竞赛模式**和**校准 UI** 两种职责，参数列表臃肿。
-- `test/` 目录下存放大量细碎模块单元测试，导致真正的独立功能测试入口没有位置。
+- `tests/` 目录下存放大量细碎模块单元测试，导致真正的独立功能测试入口没有位置。
 - 实际部署中需要单独验证：串口完整收发、双相机画面、双相机推理，但这些能力都淹没在 `main_arm64.py` 里，无法独立运行。
 
 本设计目标：
 
 1. `main_arm64.py` 成为**极简的完整竞赛入口**。
 2. 校准、串口测试、相机测试、推理测试各自成为**独立可运行脚本**。
-3. 细碎模块单元测试迁移到 `tools/crane_tests/`，`test/` 只保留功能级测试入口。
+3. 细碎模块单元测试迁移到 `tools/crane_tests/`，`tests/` 只保留功能级测试入口。
 
 ## 2. 目录结构
 
@@ -27,7 +27,7 @@ scripts/           # 视觉运行时入口
   watchdog.sh                # main_arm64.py 自动重启脚本
   .gitkeep
 
-test/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
+tests/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
   calibrate.py               # 校准 UI 入口（从 main_arm64.py 迁出）
   send_test_frame.py         # 串口测试帧发送工具
   test_camera_view.py        # 双相机画面检查 UI（无模型、无串口）
@@ -64,7 +64,7 @@ python scripts/main_arm64.py [--config PATH] [-v]
 ```
 
 - 删除 `--ui`、`--no-ui`、`--mock-cameras`、`--bean-image`、`--digit-image`、`--list-cameras`。
-- `--list-cameras` 可临时移到 `test/calibrate.py`，后续再决定是否单独拆出 `scripts/list_cameras.py`。
+- `--list-cameras` 可临时移到 `tests/calibrate.py`，后续再决定是否单独拆出 `scripts/list_cameras.py`。
 
 ### 3.3 主流程
 
@@ -78,7 +78,7 @@ def main():
 
 `run_competition()` 逻辑基本不变，但不再与校准代码共存于同一文件。
 
-## 4. `test/calibrate.py` 设计
+## 4. `tests/calibrate.py` 设计
 
 ### 4.1 职责
 
@@ -87,7 +87,7 @@ def main():
 ### 4.2 参数
 
 ```bash
-python test/calibrate.py [--config PATH] [--mock-cameras]
+python tests/calibrate.py [--config PATH] [--mock-cameras]
                             [--bean-image PATH] [--digit-image PATH]
                             [--list-cameras]
 ```
@@ -138,9 +138,9 @@ class CameraViewer:
 
 不拆基类，直接在 `CalibrationUI` 上加开关参数（`enable_sliders`、`enable_save`、`enable_inference`）。该方案实现更快，但长期会导致 `CalibrationUI` 积累过多模式开关，再次臃肿。**本设计采用继承/组合方案。**
 
-## 7. `test/` 功能测试脚本设计
+## 7. `tests/` 功能测试脚本设计
 
-### 7.1 `test/test_serial_loopback.py`
+### 7.1 `tests/test_serial_loopback.py`
 
 #### 用途
 
@@ -149,7 +149,7 @@ class CameraViewer:
 #### 参数
 
 ```bash
-python test/test_serial_loopback.py [--config PATH] --mode {loopback,protocol}
+python tests/test_serial_loopback.py [--config PATH] --mode {loopback,protocol}
                                     [--count N] [--interval SEC]
 ```
 
@@ -159,7 +159,7 @@ python test/test_serial_loopback.py [--config PATH] --mode {loopback,protocol}
 - `--mode loopback`：用 `serial.Serial` 直接打开端口，发送随机 12 字节并读回校验；同时测试 `START_COMMAND` 的发送与接收。
 - `--mode protocol`：通过 `SerialPort.send_result()` 发送结果帧，再用 `poll_start()` / `wait_start()` 等待下位机回传或触发 START，统计收发成功率。
 
-### 7.2 `test/test_camera_view.py`
+### 7.2 `tests/test_camera_view.py`
 
 #### 用途
 
@@ -168,7 +168,7 @@ python test/test_serial_loopback.py [--config PATH] --mode {loopback,protocol}
 #### 参数
 
 ```bash
-python test/test_camera_view.py [--config PATH] [--mock-cameras]
+python tests/test_camera_view.py [--config PATH] [--mock-cameras]
 ```
 
 #### 行为
@@ -177,7 +177,7 @@ python test/test_camera_view.py [--config PATH] [--mock-cameras]
 - 使用 `CameraViewer` 显示画面，按 `1/2` 切换，叠加辅助线。
 - 无滑块、不保存配置、不运行推理。
 
-### 7.3 `test/test_inference_ui.py`
+### 7.3 `tests/test_inference_ui.py`
 
 #### 用途
 
@@ -186,7 +186,7 @@ python test/test_camera_view.py [--config PATH] [--mock-cameras]
 #### 参数
 
 ```bash
-python test/test_inference_ui.py [--config PATH] [--mock-cameras]
+python tests/test_inference_ui.py [--config PATH] [--mock-cameras]
                                  [--bean-image PATH] [--digit-image PATH]
 ```
 
@@ -203,15 +203,15 @@ python test/test_inference_ui.py [--config PATH] [--mock-cameras]
 
 | 原路径 | 新路径 |
 |--------|--------|
-| `test/test_postprocess.py` | `tools/crane_tests/test_postprocess.py` |
-| `test/test_task_generator.py` | `tools/crane_tests/test_task_generator.py` |
-| `test/test_serial.py` | `tools/crane_tests/test_serial.py` |
-| `test/test_config.py` | `tools/crane_tests/test_config.py` |
-| `test/test_camera.py` | `tools/crane_tests/test_camera.py` |
-| `test/test_model.py` | `tools/crane_tests/test_model.py` |
-| `test/test_ui.py` | `tools/crane_tests/test_ui.py` |
-| `test/test_send_test_frame.py` | `tools/crane_tests/test_send_test_frame.py` |
-| `test/test_main.py` | 删除或大幅精简 |
+| `tests/test_postprocess.py` | `tools/crane_tests/test_postprocess.py` |
+| `tests/test_task_generator.py` | `tools/crane_tests/test_task_generator.py` |
+| `tests/test_serial.py` | `tools/crane_tests/test_serial.py` |
+| `tests/test_config.py` | `tools/crane_tests/test_config.py` |
+| `tests/test_camera.py` | `tools/crane_tests/test_camera.py` |
+| `tests/test_model.py` | `tools/crane_tests/test_model.py` |
+| `tests/test_ui.py` | `tools/crane_tests/test_ui.py` |
+| `tests/test_send_test_frame.py` | `tools/crane_tests/test_send_test_frame.py` |
+| `tests/test_main.py` | 删除或大幅精简 |
 
 ### 8.2 调整内容
 
@@ -223,7 +223,7 @@ python test/test_inference_ui.py [--config PATH] [--mock-cameras]
 
 - `docs/runbooks/commands.md`：
   - 更新竞赛模式命令为 `python3 scripts/main_arm64.py`。
-  - 新增校准命令 `python test/calibrate.py`。
+  - 新增校准命令 `python tests/calibrate.py`。
   - 新增三个测试脚本的运行命令。
   - 更新单元测试命令为 `pytest tools/crane_tests/ -v`。
 - `CLAUDE.md`：
@@ -234,7 +234,7 @@ python test/test_inference_ui.py [--config PATH] [--mock-cameras]
 
 ```text
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ scripts/        │     │ test/           │     │ tools/          │
+│ scripts/        │     │ tests/           │     │ tools/          │
 │ main_arm64.py   │     │ test_serial_    │     │ crane_tests/    │
 │ calibrate.py    │     │   loopback.py   │     │ test_*.py       │
 │                 │     │ test_camera_    │     │                 │
@@ -267,15 +267,15 @@ python test/test_inference_ui.py [--config PATH] [--mock-cameras]
 
 - `main_arm64.py`：竞赛模式下，模型加载失败直接报错退出；串口打开失败直接报错退出。
 - `calibrate.py`：模型加载失败进入 camera-only 模式；相机打开失败在 `fallback_empty=True` 时降级为 mock。
-- `test/test_serial_loopback.py`：打开串口失败直接报错；收发失败统计错误并打印。
-- `test/test_camera_view.py` / `test/test_inference_ui.py`：相机打开失败报错退出；模型加载失败根据脚本目的决定是否降级。
+- `tests/test_serial_loopback.py`：打开串口失败直接报错；收发失败统计错误并打印。
+- `tests/test_camera_view.py` / `tests/test_inference_ui.py`：相机打开失败报错退出；模型加载失败根据脚本目的决定是否降级。
 
 ## 12. 验收标准
 
 - [ ] `scripts/main_arm64.py` 参数不超过 `--config` 和 `--verbose`。
-- [ ] `python test/calibrate.py` 能正常启动校准 UI。
-- [ ] `test/test_serial_loopback.py` 能在 RDK X5 上完成回环/协议收发测试。
-- [ ] `test/test_camera_view.py` 能显示两个相机画面和辅助线，无滑块、无推理。
-- [ ] `test/test_inference_ui.py` 能加载模型并叠加检测框，不打开串口。
+- [ ] `python tests/calibrate.py` 能正常启动校准 UI。
+- [ ] `tests/test_serial_loopback.py` 能在 RDK X5 上完成回环/协议收发测试。
+- [ ] `tests/test_camera_view.py` 能显示两个相机画面和辅助线，无滑块、无推理。
+- [ ] `tests/test_inference_ui.py` 能加载模型并叠加检测框，不打开串口。
 - [ ] `pytest tools/crane_tests/ -v` 全部通过。
 - [ ] `docs/runbooks/commands.md` 和 `CLAUDE.md` 已同步更新。
