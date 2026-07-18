@@ -1,10 +1,12 @@
 # Crane Vision 测试与入口解耦实现计划
 
+> **已实现。** 2026-07-18 最终调整：`calibrate.py` 与 `send_test_frame.py` 从 `scripts/` 移入 `test/`，与 `test_camera_view.py` 等统一作为独立功能测试入口。生产入口 `scripts/` 仅保留 `main_arm64.py`、`main_amd64.py`、`watchdog.sh`。
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 将 `main_arm64.py` 精简为纯竞赛入口，把校准、串口测试、相机测试、推理测试拆分为独立脚本，并将细碎单元测试迁移到 `tools/crane_tests/`。
 
-**架构：** 新增 `models/camera_viewer.py` 作为极简双相机查看器基类；`models/ui.py` 中的 `CalibrationUI` 继承该基类并增加滑块、保存、推理叠加；`scripts/calibrate.py` 承接校准入口；`test/` 下新增三个独立功能测试脚本；现有 `test/test_*.py` 迁移到 `tools/crane_tests/`。
+**架构：** 新增 `models/camera_viewer.py` 作为极简双相机查看器基类；`models/ui.py` 中的 `CalibrationUI` 继承该基类并增加滑块、保存、推理叠加；`test/calibrate.py` 承接校准入口；`test/` 下新增三个独立功能测试脚本；现有 `test/test_*.py` 迁移到 `tools/crane_tests/`。
 
 **Tech Stack:** Python 3, OpenCV, Tkinter, PIL/Pillow, PyYAML, pyserial, pytest, 现有 `models/` 运行时模块。
 
@@ -14,7 +16,7 @@
 
 ### 新增文件
 
-- `scripts/calibrate.py` — 校准 UI 入口（从 `main_arm64.py` 迁出）
+- `test/calibrate.py` — 校准 UI 入口（从 `main_arm64.py` 迁出）
 - `models/camera_viewer.py` — 极简双相机查看器基类
 - `test/test_camera_view.py` — 双相机画面检查
 - `test/test_inference_ui.py` — 双相机推理检查
@@ -607,15 +609,15 @@ rm .git-msg
 
 ---
 
-## Task 3: 创建 `scripts/calibrate.py`
+## Task 3: 创建 `test/calibrate.py`
 
 **目标：** 把校准入口从 `main_arm64.py` 迁出，成为独立脚本。
 
 **Files:**
-- Create: `scripts/calibrate.py`
+- Create: `test/calibrate.py`
 - Modify: `scripts/main_arm64.py`（在 Task 4 中彻底删除校准逻辑）
 
-- [ ] **Step 1: 创建 `scripts/calibrate.py`**
+- [ ] **Step 1: 创建 `test/calibrate.py`**
 
 完整代码：
 
@@ -758,7 +760,7 @@ if __name__ == "__main__":
 - [ ] **Step 2: 验证 `calibrate.py` 语法正确**
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python -m py_compile scripts/calibrate.py
+conda run --prefix /d/conda_envs/crane-clean python -m py_compile test/calibrate.py
 ```
 
 Expected: 无输出（编译成功）。
@@ -766,7 +768,7 @@ Expected: 无输出（编译成功）。
 - [ ] **Step 3: 提交**
 
 ```bash
-git add scripts/calibrate.py
+git add test/calibrate.py
 cat > .git-msg << 'EOF'
 feat(scripts): 新增 calibrate.py 作为独立校准入口
 
@@ -1472,7 +1474,7 @@ conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/
 python3 scripts/main_arm64.py
 
 # 校准辅助线
-python3 scripts/calibrate.py
+python3 test/calibrate.py
 
 # 独立功能测试
 python3 test/test_camera_view.py
@@ -1494,22 +1496,22 @@ python3 test/test_serial_loopback.py --mode protocol --count 10
 conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/ -v
 
 # 校准辅助线
-conda run --prefix /d/conda_envs/crane-clean python scripts/calibrate.py --mock-cameras
+conda run --prefix /d/conda_envs/crane-clean python test/calibrate.py --mock-cameras
 
 # 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py
 ```
 
-2. 在“视觉运行时映射规则”段落，把 `python scripts/main_arm64.py` 改为 `python scripts/calibrate.py`。
+2. 在“视觉运行时映射规则”段落，把 `python scripts/main_arm64.py` 改为 `python test/calibrate.py`。
 
 3. 在“重要注意事项”段落，更新：
-   - `main_arm64.py` 仅用于竞赛模式；校准请用 `scripts/calibrate.py`。
+   - `main_arm64.py` 仅用于竞赛模式；校准请用 `test/calibrate.py`。
    - 测试脚本说明。
 
 - [ ] **Step 3: 验证文档无语法错误**
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python -m py_compile scripts/main_arm64.py scripts/calibrate.py test/test_camera_view.py test/test_inference_ui.py test/test_serial_loopback.py
+conda run --prefix /d/conda_envs/crane-clean python -m py_compile scripts/main_arm64.py test/calibrate.py test/test_camera_view.py test/test_inference_ui.py test/test_serial_loopback.py
 ```
 
 Expected: 无输出。
@@ -1546,7 +1548,7 @@ Expected: 全部通过。
 - [ ] **Step 2: 验证所有入口脚本语法**
 
 ```bash
-conda run --prefix /d/conda_envs/crane-clean python -m py_compile scripts/main_arm64.py scripts/calibrate.py test/test_camera_view.py test/test_inference_ui.py test/test_serial_loopback.py
+conda run --prefix /d/conda_envs/crane-clean python -m py_compile scripts/main_arm64.py test/calibrate.py test/test_camera_view.py test/test_inference_ui.py test/test_serial_loopback.py
 ```
 
 Expected: 无输出。
