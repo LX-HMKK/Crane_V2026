@@ -113,7 +113,7 @@ scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
 - `C1-C3`：取货区 1–3 的豆子颜色（01=黄豆，02=绿豆，03=白芸豆）。
 - `N4-N8`：放置区 4–8 上的数字（01–05）。
 
-运行 `python tests/calibrate.py` 可在实时预览上通过滑块调整辅助线；位置会自动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
+运行 `python tests/calibrate.py` 可在实时预览上通过滑块调整辅助线，点击 **SAVE** 按钮手动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
 
 ## 相机与模型配置字段
 
@@ -172,7 +172,7 @@ Remove-Item .git-msg
 
 - `main_arm64.py` 仅用于竞赛模式；校准请使用 `tests/calibrate.py`，双相机画面检查请使用 `tests/test_camera_view.py`，推理检查请使用 `tests/test_inference_ui.py`，串口测试请使用 `tests/test_serial_loopback.py`。
 - 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`calibrate.py`、`test_camera_view.py`、`test_inference_ui.py`、`main_amd64.py` 和单元测试可在 x86 上安全运行。
-- `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置会自动保存回该文件。
+- `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置需点击 **SAVE** 按钮手动保存回该文件。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
 - `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 921600 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。

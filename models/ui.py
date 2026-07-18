@@ -66,6 +66,7 @@ class CalibrationUI(CameraViewer):
         self._latest_dets = {"bean": None, "digit": None}
         self._latest_names = {"bean": None, "digit": None}
         self._infer_thread = None
+        self._save_feedback_id = None
 
         # Parent already created main_frame/video_container/video_label;
         # add the control panel below the video area.
@@ -82,19 +83,34 @@ class CalibrationUI(CameraViewer):
         self.inference_overlay = bool(ctl.get("inference_overlay", True))
 
     def _save_cfg(self):
-        with open(self.cfg_path, "w", encoding="utf-8") as f:
-            yaml.dump(self.cfg, f, sort_keys=False, allow_unicode=True)
+        try:
+            with open(self.cfg_path, "w", encoding="utf-8") as f:
+                yaml.dump(self.cfg, f, sort_keys=False, allow_unicode=True)
+            return True
+        except OSError as exc:
+            logging.error("Failed to save config to %s: %s", self.cfg_path, exc)
+            return False
 
     def _save_with_feedback(self):
         """Write config to disk and briefly show confirmation on the save button."""
-        self._save_cfg()
-        if hasattr(self, "_save_button") and self._save_button.winfo_exists():
-            self._save_button.config(text="SAVED ✓", bg="#006600")
-            self.root.after(1500, self._restore_save_button_text)
+        ok = self._save_cfg()
+        btn = getattr(self, "_save_button", None)
+        if btn is None or not btn.winfo_exists():
+            return
+        if ok:
+            btn.config(text="SAVED ✓", bg="#006600")
+        else:
+            btn.config(text="ERROR", bg="#aa0000")
+        # Cancel any previous restore timer so rapid clicks don't stack.
+        if self._save_feedback_id is not None:
+            self.root.after_cancel(self._save_feedback_id)
+        self._save_feedback_id = self.root.after(1500, self._restore_save_button_text)
 
     def _restore_save_button_text(self):
-        if hasattr(self, "_save_button") and self._save_button.winfo_exists():
-            self._save_button.config(text="SAVE", bg="#0066cc")
+        self._save_feedback_id = None
+        btn = getattr(self, "_save_button", None)
+        if btn is not None and btn.winfo_exists():
+            btn.config(text="SAVE", bg="#0066cc")
 
     def _quit(self):
         """Destroy the window without saving config (use SAVE button first)."""
@@ -184,7 +200,7 @@ class CalibrationUI(CameraViewer):
             fg="white",
             font=font,
             width=10,
-            height=1,
+            height=max(1, self.button_height // 20),
         )
         self._bean_button.pack(side=tk.LEFT, padx=1)
 
@@ -196,7 +212,7 @@ class CalibrationUI(CameraViewer):
             fg="white",
             font=font,
             width=10,
-            height=1,
+            height=max(1, self.button_height // 20),
         )
         self._digit_button.pack(side=tk.LEFT, padx=1)
 
@@ -210,7 +226,7 @@ class CalibrationUI(CameraViewer):
             fg="white",
             font=font,
             width=8,
-            height=1,
+            height=max(1, self.button_height // 20),
         )
         self._exit_button.pack(side=tk.RIGHT, padx=1)
 
@@ -222,7 +238,7 @@ class CalibrationUI(CameraViewer):
             fg="white",
             font=font,
             width=8,
-            height=1,
+            height=max(1, self.button_height // 20),
         )
         self._save_button.pack(side=tk.RIGHT, padx=1)
 
