@@ -93,14 +93,14 @@ def _mock_tkinter_and_pil(monkeypatch):
     monkeypatch.setattr("models.ui.Image.fromarray", MagicMock)
 
 
-def test_ui_saves_lines_on_change(tmp_path):
+def test_ui_saves_lines_on_explicit_save(tmp_path):
     cfg_path = _write_cfg(tmp_path)
     cam_bean = MagicMock()
     cam_digit = MagicMock()
     ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
     ui._set_line("bean", "left_x", 150)
     ui._set_line("digit", "x1", 250)
-    # With debouncing the file is not written until _save_cfg is flushed.
+    # _set_line only updates memory; disk write happens on explicit _save_cfg.
     ui._save_cfg()
 
     with open(cfg_path, "r") as f:
@@ -109,15 +109,16 @@ def test_ui_saves_lines_on_change(tmp_path):
     assert saved["lines"]["digit"]["x1"] == 250
 
 
-def test_set_line_debounces_save(tmp_path):
+def test_set_line_updates_memory_only(tmp_path):
     cfg_path = _write_cfg(tmp_path)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     ui._set_line("bean", "left_x", 150)
-    # File should not be written immediately while a debounced save is pending.
-    assert ui._save_pending is not None
+    # File must NOT be written by _set_line alone — save is manual (SAVE button).
     text_before = cfg_path.read_text(encoding="utf-8")
     assert "left_x: 150" not in text_before
-    # Flushing the pending save writes the file.
+    # Memory is updated though.
+    assert ui.cfg["lines"]["bean"]["left_x"] == 150
+    # Explicit save writes to disk.
     ui._save_cfg()
     text_after = cfg_path.read_text(encoding="utf-8")
     assert "left_x: 150" in text_after

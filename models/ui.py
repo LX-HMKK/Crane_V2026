@@ -66,7 +66,6 @@ class CalibrationUI(CameraViewer):
         self._latest_dets = {"bean": None, "digit": None}
         self._latest_names = {"bean": None, "digit": None}
         self._infer_thread = None
-        self._save_pending = None
 
         # Parent already created main_frame/video_container/video_label;
         # add the control panel below the video area.
@@ -85,7 +84,21 @@ class CalibrationUI(CameraViewer):
     def _save_cfg(self):
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             yaml.dump(self.cfg, f, sort_keys=False, allow_unicode=True)
-        self._save_pending = None
+
+    def _save_with_feedback(self):
+        """Write config to disk and briefly show confirmation on the save button."""
+        self._save_cfg()
+        if hasattr(self, "_save_button") and self._save_button.winfo_exists():
+            self._save_button.config(text="SAVED ✓", bg="#006600")
+            self.root.after(1500, self._restore_save_button_text)
+
+    def _restore_save_button_text(self):
+        if hasattr(self, "_save_button") and self._save_button.winfo_exists():
+            self._save_button.config(text="SAVE", bg="#0066cc")
+
+    def _quit(self):
+        """Destroy the window without saving config (use SAVE button first)."""
+        super()._quit()
 
     def _start_inference_worker(self):
         """Start a background thread for model inference if models are loaded."""
@@ -170,7 +183,8 @@ class CalibrationUI(CameraViewer):
             bg="#00aa00",
             fg="white",
             font=font,
-            height=self.button_height // 20,
+            width=10,
+            height=1,
         )
         self._bean_button.pack(side=tk.LEFT, padx=1)
 
@@ -181,14 +195,45 @@ class CalibrationUI(CameraViewer):
             bg="#555555",
             fg="white",
             font=font,
-            height=self.button_height // 20,
+            width=10,
+            height=1,
         )
         self._digit_button.pack(side=tk.LEFT, padx=1)
+
+        # SAVE / EXIT buttons in the same row, right-aligned.
+        # Pack EXIT first (far right), then SAVE (to its left).
+        self._exit_button = tk.Button(
+            mode_frame,
+            text="EXIT",
+            command=self._quit,
+            bg="#aa3333",
+            fg="white",
+            font=font,
+            width=8,
+            height=1,
+        )
+        self._exit_button.pack(side=tk.RIGHT, padx=1)
+
+        self._save_button = tk.Button(
+            mode_frame,
+            text="SAVE",
+            command=self._save_with_feedback,
+            bg="#0066cc",
+            fg="white",
+            font=font,
+            width=8,
+            height=1,
+        )
+        self._save_button.pack(side=tk.RIGHT, padx=1)
 
         self.sliders_frame = tk.Frame(control_frame)
         self.sliders_frame.pack(fill=tk.X)
 
         self._create_sliders(self.mode)
+
+        # Update the info bar to mention the touch-friendly buttons.
+        self._info_label.config(text="1=BEAN  2=DIGIT  f=fullscreen  [SAVE] [EXIT]")
+
         self.root.update_idletasks()
 
     def _create_sliders(self, mode):
@@ -265,15 +310,8 @@ class CalibrationUI(CameraViewer):
             self._digit_button.config(bg="#0066cc", relief=tk.SUNKEN)
 
     def _set_line(self, group, key, value):
+        # Update in-memory config only — write to disk happens on explicit SAVE.
         self.cfg["lines"][group][key] = int(value)
-        # Debounce YAML writes so rapid slider movements don't stall the UI
-        # with repeated disk I/O.
-        if self._save_pending is not None:
-            try:
-                self.root.after_cancel(self._save_pending)
-            except Exception:
-                pass
-        self._save_pending = self.root.after(300, self._save_cfg)
 
     @staticmethod
     def _class_name(names, cls_id):
@@ -365,7 +403,7 @@ class CalibrationUI(CameraViewer):
                 "GUI is not available; cannot run calibration UI on this machine"
             )
 
-        print("Calibration UI started. Keys: 1=bean camera, 2=digit camera, ESC=exit")
+        print("Calibration UI started. Keys: 1=bean, 2=digit, f=fullscreen | Buttons: SAVE, EXIT")
         self._running = True
         self._start_inference_worker()
         self._update_frame()
