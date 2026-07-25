@@ -24,18 +24,13 @@ data/              # 数据集（YOLO 格式：images/ + labels/ + dataset.yaml�
                    #   beans/          – 豆子图片 + beans_split/
 docs/              # 部署与运行时文档
                    #   runbooks/
-                   #     commands.md           – 完整命令清单
-                   #     serial_port.md        – 串口硬件与协议
+                   #     commands.md             – 完整命令清单
                    #   reference/
-                   #     dataset_spec.md       – 数据集规范
-                   #     asset_naming.md       – 资产命名规范
-                   #     CRANE_VISION_PROTOCOL.md – 通信协议
-                   #     requirements.md       – 原始需求（已归档）
+                   #     conventions.md          – 数据集与资产命名规范
+                   #     CRANE_VISION_PROTOCOL.md – 串口硬件与通信协议
                    #   guides/
-                   #     RDKx5_Bin_Inference.md – YOLO11 BPU 板端工作流
-                   #     vision_runtime.md      – 视觉运行时入口与状态机
-                   #     vision_mapping.md      – 分区映射与辅助线规则
-                   #   superpowers/           – 设计文档与实现计划
+                   #     RDKx5_Bin_Inference.md   – YOLO11 BPU 板端工作流
+                   #     vision_runtime.md        – 运行时入口、状态机与分区映射规则
 models/            # 视觉运行时源码
                    #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
                    #   bean_model.py, digit_model.py, camera.py, pt_model.py
@@ -97,8 +92,7 @@ scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
 
 ## 数据集与资产规范
 
-- 数据集目录与 YAML 规范：[docs/reference/dataset_spec.md](docs/reference/dataset_spec.md)
-- 模型资产命名规范（.pt/.onnx/.bin）：[docs/reference/asset_naming.md](docs/reference/asset_naming.md)
+- 数据集与资产命名规范：[docs/reference/conventions.md](docs/reference/conventions.md)
 
 ## 视觉运行时映射规则
 
@@ -113,7 +107,7 @@ scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
 - `C1-C3`：取货区 1–3 的豆子颜色（01=黄豆，02=绿豆，03=白芸豆）。
 - `N4-N8`：放置区 4–8 上的数字（01–05）。
 
-运行 `python tests/calibrate.py` 可在实时预览上通过滑块调整辅助线，点击 **SAVE** 按钮手动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_mapping.md](docs/guides/vision_mapping.md)。
+运行 `python tests/calibrate.py` 可在实时预览上通过滑块调整辅助线，点击 **SAVE** 按钮手动写回 `configs/vision.yaml`。具体分区规则见 [docs/guides/vision_runtime.md](docs/guides/vision_runtime.md)。
 
 ## 相机与模型配置字段
 
@@ -139,7 +133,7 @@ scp configs/vision.yaml root@192.168.128.10:/home/sunrise/Crane_WS/configs/
 
 ## 串口
 
-RDK X5 与下位机通过 `/dev/ttyS1` 通信，默认配置 **921600 8/N/1**。参数来自 `configs/vision.yaml` 的 `serial` 段。**不要使用 `/dev/ttyS0`**（系统调试串口）。硬件引脚、接线与协议细节见 [docs/runbooks/serial_port.md](docs/runbooks/serial_port.md)。
+RDK X5 与下位机通过 `/dev/ttyS1` 通信，默认配置 **921600 8/N/1**。参数来自 `configs/vision.yaml` 的 `serial` 段。**不要使用 `/dev/ttyS0`**（系统调试串口）。硬件引脚、接线与协议细节见 [docs/reference/CRANE_VISION_PROTOCOL.md](docs/reference/CRANE_VISION_PROTOCOL.md)。
 
 ## 提交代码
 
