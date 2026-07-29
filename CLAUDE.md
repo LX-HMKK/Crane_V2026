@@ -34,18 +34,22 @@ docs/              # 部署与运行时文档
 models/            # 视觉运行时源码
                    #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
                    #   bean_model.py, digit_model.py, camera.py, pt_model.py
-                   #   serial_port.py, task_generator.py, mapping.py, ui.py
+                   #   serial_port.py  – SerialPort + SerialThread（后台串口）
+                   #   task_generator.py – 分区聚合 + 逻辑补全
+                   #   logic_completion.py – 置信度排列评分 + 缺区推断
+                   #   mapping.py, ui.py – CalibrationUI + CompetitionUI
 scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 竞赛模式入口
                    #   main_amd64.py – x86 本机完整流程测试入口
                    #   watchdog.sh – main_arm64.py 自动重启脚本
                    #   .gitkeep
 tests/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
-                   #   calibrate.py           – 校准 UI 入口
-                   #   send_test_frame.py     – 串口测试帧发送工具
-                   #   test_camera_view.py    – 双相机画面检查
-                   #   test_inference_ui.py   – 双相机推理检查
-                   #   test_serial_loopback.py – 串口回环/协议测试
+                   #   calibrate.py              – 校准 UI 入口
+                   #   send_test_frame.py        – 串口测试帧发送工具
+                   #   test_camera_view.py       – 双相机画面检查
+                   #   test_inference_ui.py      – 双相机推理检查
+                   #   test_serial_loopback.py   – 串口回环/协议测试
+                   #   test_logic_completion.py  – 逻辑补全模块测试
 requirements.txt   # 运行时/测试依赖
 README.md          # 项目概览（侧重视觉模块）
 tools/yolov5/      # 内嵌 YOLOv5 仓库（train.py、detect.py、val.py、export.py 等）
@@ -54,6 +58,20 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 ```
 
 `data/*` 和 `tools/onnx/*` 已加入 `.gitignore`，仅保留 `data/.gitkeep`。大型资产和数据集只保存在本地工作区，不提交到仓库。
+
+## 竞赛模式架构
+
+`main_arm64.py` 使用 3 线程模型：
+
+| 线程 | 类 | 职责 |
+|---|---|---|
+| 主线程 (Tkinter) | `CompetitionUI` | 双相机同时捕获 + 辅助线 + 检测框 overlay |
+| 推理 worker (daemon) | `CalibrationUI._inference_worker` | `model.predict()` → `generate_frame_with_completion()` → `serial.current_frame` |
+| 串口线程 (daemon) | `SerialThread` | `poll_start()` @200Hz → `send_result()` @20Hz |
+
+**逻辑补全**：`generate_frame_with_completion()` 在检测缺区/重复时，通过全局排列评分推断最可能的值。推断区在 UI 上以橙色框显示。推断超过上限（bean≤1, digit≤2）时拒绝发送。
+
+**Sticky result**：结果不变不更新串口；下位机停发 START 后保留缓存结果，恢复后立即续发。
 
 ## 常用命令
 
@@ -76,6 +94,7 @@ python tests/test_camera_view.py           # 只测相机画面与摆放
 python tests/test_inference_ui.py          # 加载模型，叠加检测框，无串口
 python tests/test_serial_loopback.py --mode loopback   # TX-RX 短接回环
 python tests/test_serial_loopback.py --mode protocol   # 接真实下位机
+python tests/test_logic_completion.py      # 逻辑补全模块独立测试
 ```
 
 ## RDK X5 连接与同步
@@ -164,9 +183,10 @@ Remove-Item .git-msg
 
 ## 重要注意事项
 
-- `main_arm64.py` 仅用于竞赛模式；校准请使用 `tests/calibrate.py`，双相机画面检查请使用 `tests/test_camera_view.py`，推理检查请使用 `tests/test_inference_ui.py`，串口测试请使用 `tests/test_serial_loopback.py`。
-- 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`calibrate.py`、`test_camera_view.py`、`test_inference_ui.py`、`main_amd64.py` 和单元测试可在 x86 上安全运行。
+- `main_arm64.py` 竞赛模式使用 `CompetitionUI`（双相机同时捕获 + 逻辑补全 + 串口后台线程）。校准请使用 `tests/calibrate.py`，画面检查 `tests/test_camera_view.py`，推理检查 `tests/test_inference_ui.py`，串口 `tests/test_serial_loopback.py`，逻辑补全 `tests/test_logic_completion.py`。
+- 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`calibrate.py`、`test_camera_view.py`、`test_inference_ui.py`、`main_amd64.py`、`test_logic_completion.py` 和单元测试可在 x86 上安全运行。
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置需点击 **SAVE** 按钮手动保存回该文件。
+- 逻辑补全配置 `logic.confidence_threshold` / `max_inferred_beans` / `max_inferred_digits` 控制推断容忍度。推断区 UI 橙色框，检测区黄色框。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
 - 提交新的训练/导出脚本或配置前，先确认它们应放在顶层 `scripts/`/`configs/`（视觉运行时）还是 `tools/yolov5/`（传统 YOLOv5 训练）。
 - `main_arm64.py` 现已通过 `models.serial_port.open_serial_port()` 初始化串口，默认 921600 8/N/1；如需调整串口参数，应修改 `models/serial_port.py` 或 `configs/vision.yaml`。

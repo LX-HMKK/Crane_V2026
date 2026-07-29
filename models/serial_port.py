@@ -1,4 +1,6 @@
+import logging
 import numbers
+import threading
 import time
 
 
@@ -112,3 +114,74 @@ class SerialPort:
 
     def close(self):
         self.ser.close()
+
+
+class SerialThread:
+    """Background thread: continuous serial RX polling + timed result TX.
+
+    Owns a SerialPort exclusively — all serial I/O happens on this thread.
+    The main thread sets ``current_frame`` when vision produces a new result;
+    the serial thread sends it at *send_interval* Hz whenever START is active.
+    """
+
+    def __init__(self, device, baudrate, timeout=0.05,
+                 start_timeout=0.3, send_interval=0.1):
+        self._port = open_serial_port(device, baudrate, timeout=timeout)
+        self._start_timeout = start_timeout
+        self._send_interval = send_interval
+        self._current_frame = None
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread = None
+
+    # ── thread-safe properties (main thread ↔ serial thread) ──────────
+
+    @property
+    def current_frame(self):
+        with self._lock:
+            return self._current_frame
+
+    @current_frame.setter
+    def current_frame(self, frame):
+        with self._lock:
+            self._current_frame = frame
+
+    @property
+    def is_start_active(self):
+        return self._port.is_start_active(self._start_timeout)
+
+    # ── lifecycle ─────────────────────────────────────────────────────
+
+    def start(self):
+        """Launch the background serial thread (daemon)."""
+        if self._thread is not None and self._thread.is_alive():
+            raise RuntimeError("SerialThread is already running")
+        self._running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def stop(self):
+        """Signal the thread to exit, join, and close the serial port."""
+        self._running = False
+        if self._thread is not None:
+            self._thread.join(timeout=2.0)
+        self._port.close()
+
+    # ── internal ───────────────────────────────────────────────────────
+
+    def _run(self):
+        last_send = 0.0
+        while self._running:
+            try:
+                self._port.poll_start()
+                if self._port.is_start_active(self._start_timeout):
+                    frame = self.current_frame
+                    if frame is not None:
+                        now = time.monotonic()
+                        if now - last_send >= self._send_interval:
+                            self._port.send_result(*frame)
+                            last_send = now
+            except Exception:
+                logging.exception("SerialThread send failed")
+                time.sleep(1.0)  # backoff on persistent fault
+            time.sleep(0.005)  # 200 Hz poll rate

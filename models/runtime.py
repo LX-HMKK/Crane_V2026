@@ -24,9 +24,9 @@ def load_vision_cfg(path):
         return yaml.safe_load(f)
 
 
-def init_logging():
+def init_logging(debug=False):
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG if debug else logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )

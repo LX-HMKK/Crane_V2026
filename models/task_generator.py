@@ -266,3 +266,110 @@ class TaskGenerator:
             digits[8],
         )
         return payload, "ok"
+
+    def generate_frame_with_completion(self, bean_dets, digit_dets, *,
+                                       confidence_threshold=0.5,
+                                       max_inferred_beans=1,
+                                       max_inferred_digits=2):
+        """Build result frame with logical completion of missing/duplicate zones.
+
+        Unlike :meth:`generate_frame`, this method tolerates missing zones
+        and duplicate classifications by inferring the most likely complete
+        assignment via confidence-weighted permutation scoring.
+
+        Returns:
+            ``(payload, bean_results, digit_results, reason)`` where
+            *payload* is an 8-tuple or ``None``, and *results* dicts map
+            ``zone -> (value, 'detected'|'inferred', confidence)``.
+        """
+        from models.logic_completion import count_inferred, validate_and_complete
+
+        err = self._validate_lines()
+        if err:
+            return None, {}, {}, err
+
+        for name, value in (
+            ("mapping", self.mapping),
+            ("bean_names", self.bean_names),
+            ("digit_names", self.digit_names),
+        ):
+            if not isinstance(value, dict):
+                return None, {}, {}, f"invalid {name}"
+
+        # ── aggregate detections ───────────────────────────────────────
+        bean_best, err = self._aggregate_beans(bean_dets)
+        if err:
+            return None, {}, {}, err
+        digit_best, err = self._aggregate_digits(digit_dets)
+        if err:
+            return None, {}, {}, err
+
+        # ── map bean zones to (color_code, confidence) ─────────────────
+        bean_zone_vals = {}
+        for zone in (1, 2, 3):
+            det = bean_best[zone]
+            if det is None:
+                bean_zone_vals[zone] = None
+                continue
+            cls_id = int(det[5])
+            name = self.bean_names.get(cls_id)
+            if name is None:
+                bean_zone_vals[zone] = None
+                continue
+            code = self._bean_color_code(name)
+            if code is None:
+                bean_zone_vals[zone] = None
+                continue
+            bean_zone_vals[zone] = (code, float(det[4]))
+
+        # ── map digit zones to (digit_value, confidence) ───────────────
+        digit_zone_vals = {}
+        for zone in (4, 5, 6, 7, 8):
+            det = digit_best[zone]
+            if det is None:
+                digit_zone_vals[zone] = None
+                continue
+            cls_id = int(det[5])
+            name = self.digit_names.get(cls_id)
+            if name is None:
+                digit_zone_vals[zone] = None
+                continue
+            try:
+                val = int(name)
+            except ValueError:
+                digit_zone_vals[zone] = None
+                continue
+            if not (1 <= val <= 5):
+                digit_zone_vals[zone] = None
+                continue
+            digit_zone_vals[zone] = (val, float(det[4]))
+
+        # ── logical completion ─────────────────────────────────────────
+        bean_results = validate_and_complete(
+            bean_zone_vals, {1, 2, 3},
+            confidence_threshold=confidence_threshold,
+        )
+        digit_results = validate_and_complete(
+            digit_zone_vals, {1, 2, 3, 4, 5},
+            confidence_threshold=confidence_threshold,
+        )
+
+        # ── guard: too many inferred zones → reject ────────────────────
+        bean_inferred = count_inferred(bean_results)
+        digit_inferred = count_inferred(digit_results)
+        if bean_inferred > max_inferred_beans:
+            return (None, bean_results, digit_results,
+                    f"too many inferred bean zones "
+                    f"({bean_inferred} > {max_inferred_beans})")
+        if digit_inferred > max_inferred_digits:
+            return (None, bean_results, digit_results,
+                    f"too many inferred digit zones "
+                    f"({digit_inferred} > {max_inferred_digits})")
+
+        # ── build 8-tuple payload ──────────────────────────────────────
+        payload = (
+            bean_results[1][0], bean_results[2][0], bean_results[3][0],
+            digit_results[4][0], digit_results[5][0], digit_results[6][0],
+            digit_results[7][0], digit_results[8][0],
+        )
+        return payload, bean_results, digit_results, "ok"

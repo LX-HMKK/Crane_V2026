@@ -4,9 +4,7 @@ serial:
   timeout: 0.05
 protocol:
   start_timeout_sec: 0.3
-  send_interval_sec: 0.1
-  poll_interval_sec: 0.01
-  scan_retry_interval_sec: 0.5
+  send_interval_sec: 0.05
 cameras:
   bean:
     device: /dev/crane_cam_beans
@@ -59,9 +57,7 @@ ui:
     font_scale: 0.8
     inference_overlay: true
 scan:
-  frames: 5
-  max_retries: 2
-  timeout_sec: 30
+  frames: 2
 lines:
   bean:
     left_x: 515
@@ -71,6 +67,10 @@ lines:
     x2: 515
     x3: 764
     x4: 1046
+logic:
+  confidence_threshold: 0.5
+  max_inferred_beans: 1
+  max_inferred_digits: 2
 mapping:
   bean_to_digit:
     yellow: 1

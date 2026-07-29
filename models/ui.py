@@ -159,8 +159,15 @@ class CalibrationUI(CameraViewer):
                 with self._result_lock:
                     self._latest_dets[mode] = dets
                     self._latest_names[mode] = model.names
+                self._on_inference_done(mode, dets)
             except Exception as exc:
                 logging.error("Inference worker error (%s): %s", mode, exc)
+
+    def _on_inference_done(self, mode, dets):
+        """Hook called after each inference completes (in worker thread).
+
+        Override in subclasses to trigger task generation, serial updates, etc.
+        """
 
     def _submit_frame_for_inference(self, mode, frame):
         """Hand the latest frame to the inference worker without blocking the UI."""
@@ -338,16 +345,35 @@ class CalibrationUI(CameraViewer):
                 return names[cls_id]
         return str(cls_id)
 
-    def _draw_detections(self, frame, dets, names):
+    def _draw_detections(self, frame, dets, names, zone_results=None, mode=None):
+        color_detected = (0, 255, 255)   # yellow
+        color_inferred = (0, 140, 255)   # orange
         for det in dets:
             x1, y1, x2, y2, conf, cls_id = det
             cls_id = int(cls_id)
             name = self._class_name(names, cls_id)
             label = f"{name} {conf:.2f}"
-            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
+
+            # Check if this detection's zone was inferred
+            color = color_detected
+            if zone_results and mode:
+                cx = (x1 + x2) / 2
+                cy = (y1 + y2) / 2
+                if mode == "bean" and hasattr(self, 'task_gen') and self.task_gen:
+                    zone = self.task_gen._bean_zone(cx)
+                elif mode == "digit" and hasattr(self, 'task_gen') and self.task_gen:
+                    zone = self.task_gen._digit_zone(cx, cy)
+                else:
+                    zone = None
+                if zone is not None and zone in zone_results:
+                    if zone_results[zone][1] == "inferred":
+                        color = color_inferred
+                        label = f"~{name} {conf:.2f}"
+
+            cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), color, 2)
             cv2.putText(
                 frame, label, (int(x1), int(y1) - 5),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2,
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2,
             )
 
     def _draw_model_overlay(self, frame, model, error_y=30):
@@ -430,3 +456,160 @@ class CalibrationUI(CameraViewer):
             self._stop_inference_worker()
             self.cam_bean.release()
             self.cam_digit.release()
+
+
+class CompetitionUI(CalibrationUI):
+    """Competition-mode UI: calibration viewer + serial + task generation.
+
+    Extends CalibrationUI with a SerialThread and a post-inference hook that
+    runs TaskGenerator.generate_frame() and updates the serial thread.
+
+    Unlike the calibration UI, both cameras are captured on every frame cycle
+    so that generate_frame always has fresh detections from both views.
+    """
+
+    def __init__(self, cfg_path, cam_bean, cam_digit, bean_model, digit_model,
+                 task_gen=None, serial_thread=None):
+        super().__init__(cfg_path, cam_bean, cam_digit, bean_model, digit_model)
+        if not self._window_ok:
+            return
+        self.task_gen = task_gen
+        self.serial = serial_thread
+        self._last_frame = None
+        self._consecutive_failures = 0
+        self._zone_results = {"bean": {}, "digit": {}}
+        if self.serial is not None:
+            self.serial.start()
+
+    # ── dual-camera capture ────────────────────────────────────────────
+
+    def _update_frame(self):
+        """Capture both cameras every cycle so the competition always has fresh
+        detections from both views for generate_frame()."""
+        if not self._running:
+            return
+
+        ok_b, frame_b = self.cam_bean.capture()
+        ok_d, frame_d = self.cam_digit.capture()
+
+        with self._result_lock:
+            zone_results_b = dict(self._zone_results.get("bean", {}))
+            dets_b = self._latest_dets.get("bean")
+            names_b = self._latest_names.get("bean")
+            zone_results_d = dict(self._zone_results.get("digit", {}))
+            dets_d = self._latest_dets.get("digit")
+            names_d = self._latest_names.get("digit")
+
+        if ok_b and frame_b is not None:
+            self._draw_bean_lines(frame_b)
+            if self.bean_model is not None:
+                self._submit_frame_for_inference("bean", frame_b)
+                if dets_b is not None:
+                    self._draw_detections(
+                        frame_b, dets_b, names_b,
+                        zone_results=zone_results_b, mode="bean",
+                    )
+
+        if ok_d and frame_d is not None:
+            self._draw_digit_lines(frame_d)
+            if self.digit_model is not None:
+                self._submit_frame_for_inference("digit", frame_d)
+                if dets_d is not None:
+                    self._draw_detections(
+                        frame_d, dets_d, names_d,
+                        zone_results=zone_results_d, mode="digit",
+                    )
+
+        # Show the active-mode camera, or bean camera by default.
+        if self.mode == "digit" and ok_d and frame_d is not None:
+            display_frame = frame_d
+        elif ok_b and frame_b is not None:
+            display_frame = frame_b
+        elif ok_d and frame_d is not None:
+            display_frame = frame_d
+        else:
+            if self._running:
+                self.root.after(30, self._update_frame)
+            return
+
+        try:
+            avail_w = int(self._video_container.winfo_width())
+            avail_h = int(self._video_container.winfo_height())
+        except Exception:
+            avail_w, avail_h = 0, 0
+        if avail_w <= 1 or avail_h <= 1:
+            avail_w, avail_h = self.window_width, self.video_max_height
+
+        display_frame = self._resize_for_display(
+            display_frame, max_w=avail_w, max_h=avail_h
+        )
+        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+        imgtk = ImageTk.PhotoImage(image=Image.fromarray(rgb))
+        self.video_label.imgtk = imgtk
+        self.video_label.config(image=imgtk)
+
+        if self._running:
+            self.root.after(30, self._update_frame)
+
+    # ── task generation hook ───────────────────────────────────────────
+
+    def _on_inference_done(self, mode, dets):
+        """After each inference, try to generate a task frame from both cameras."""
+        if self.task_gen is None or self.serial is None:
+            return
+
+        with self._result_lock:
+            bean_dets = self._latest_dets.get("bean")
+            digit_dets = self._latest_dets.get("digit")
+
+        if bean_dets is None or digit_dets is None:
+            return
+
+        # Use logical completion to tolerate missing/duplicate zones
+        logic_cfg = self.cfg.get("logic", {})
+        frame, bean_results, digit_results, reason = \
+            self.task_gen.generate_frame_with_completion(
+                bean_dets, digit_dets,
+                confidence_threshold=logic_cfg.get("confidence_threshold", 0.5),
+                max_inferred_beans=logic_cfg.get("max_inferred_beans", 1),
+                max_inferred_digits=logic_cfg.get("max_inferred_digits", 2),
+            )
+
+        if frame is not None:
+            self._consecutive_failures = 0
+            with self._result_lock:
+                self._zone_results["bean"] = bean_results
+                self._zone_results["digit"] = digit_results
+            if frame != self._last_frame:
+                self.serial.current_frame = frame
+                self._last_frame = frame
+                inferred = sum(
+                    1 for r in (bean_results | digit_results).values()
+                    if r[1] == "inferred"
+                )
+                logging.info(
+                    "Result updated: C1-C3=%s, N4-N8=%s (%d inferred)",
+                    frame[:3], frame[3:], inferred,
+                )
+        else:
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 10:
+                self.serial.current_frame = None
+                logging.error(
+                    "generate_frame failed %d times, clearing result: %s",
+                    self._consecutive_failures, reason,
+                )
+            else:
+                logging.warning(
+                    "generate_frame failed (%d/%d): %s",
+                    self._consecutive_failures, 10, reason,
+                )
+
+    # ── lifecycle ──────────────────────────────────────────────────────
+
+    def _quit(self):
+        self._running = False
+        self._stop_inference_worker()
+        if self.serial is not None:
+            self.serial.stop()
+        self.root.destroy()
