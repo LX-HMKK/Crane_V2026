@@ -67,6 +67,7 @@ class CalibrationUI(CameraViewer):
         self._latest_names = {"bean": None, "digit": None}
         self._infer_thread = None
         self._save_feedback_id = None
+        self._settings_layout_active = False
 
         # Parent already created main_frame/video_container/video_label;
         # add the control panel below the video area.
@@ -223,6 +224,18 @@ class CalibrationUI(CameraViewer):
         )
         self._digit_button.pack(side=tk.LEFT, padx=1)
 
+        self._settings_button = tk.Button(
+            mode_frame,
+            text="SETTINGS (3)",
+            command=lambda: self._set_mode("settings"),
+            bg="#555555",
+            fg="white",
+            font=font,
+            width=12,
+            height=max(1, self.button_height // 20),
+        )
+        self._settings_button.pack(side=tk.LEFT, padx=1)
+
         # SAVE / EXIT buttons in the same row, right-aligned.
         # Pack EXIT first (far right), then SAVE (to its left).
         self._exit_button = tk.Button(
@@ -255,7 +268,10 @@ class CalibrationUI(CameraViewer):
         self._create_sliders(self.mode)
 
         # Update the info bar to mention the touch-friendly buttons.
-        self._info_label.config(text="1=BEAN  2=DIGIT  f=fullscreen  [SAVE] [EXIT]")
+        self._info_label.config(
+            text="1=BEAN  2=DIGIT  3=SETTINGS  f=fullscreen  [SAVE] [EXIT]"
+        )
+        self.root.bind("<KeyPress-3>", lambda _event: self._set_mode("settings"))
 
         self.root.update_idletasks()
 
@@ -263,6 +279,10 @@ class CalibrationUI(CameraViewer):
         """Recreate sliders for the active view, sized for the touchscreen."""
         for widget in self.sliders_frame.winfo_children():
             widget.destroy()
+
+        if mode == "settings":
+            self._create_settings_controls()
+            return
 
         font = ("Helvetica", int(12 * self.font_scale))
         # Use the video container's allocated width as the slider budget when the
@@ -312,15 +332,152 @@ class CalibrationUI(CameraViewer):
                 troughcolor="#cccccc",
             ).pack(side=tk.LEFT, fill=tk.X, expand=True, pady=0)
 
+    def _create_settings_controls(self):
+        """Build controls for runtime camera and model settings."""
+        font = ("Helvetica", int(12 * self.font_scale))
+        self._auto_exposure_vars = {}
+        self._exposure_scales = {}
+
+        for camera_name, title in (("bean", "BEAN CAMERA"), ("digit", "DIGIT CAMERA")):
+            camera_cfg = self.cfg["cameras"][camera_name]
+            row = tk.Frame(self.sliders_frame)
+            row.pack(fill=tk.X, pady=1)
+
+            tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
+                side=tk.LEFT, padx=(0, 2)
+            )
+            auto_var = tk.BooleanVar(
+                master=self.root,
+                value=bool(camera_cfg.get("auto_exposure", True)),
+            )
+            self._auto_exposure_vars[camera_name] = auto_var
+            tk.Checkbutton(
+                row,
+                text="AUTO",
+                variable=auto_var,
+                command=lambda name=camera_name: self._set_camera_auto_exposure(
+                    name, self._auto_exposure_vars[name].get()
+                ),
+                font=font,
+            ).pack(side=tk.LEFT, padx=(0, 8))
+
+            tk.Label(row, text="EXPOSURE", font=font).pack(side=tk.LEFT, padx=(0, 2))
+            exposure_var = tk.IntVar(
+                master=self.root,
+                value=int(camera_cfg.get("exposure", 1)),
+            )
+            scale = tk.Scale(
+                row,
+                from_=1,
+                to=10000,
+                resolution=1,
+                orient=tk.HORIZONTAL,
+                variable=exposure_var,
+                font=font,
+                command=lambda current, name=camera_name: self._set_camera_exposure(
+                    name, current
+                ),
+                showvalue=True,
+                length=max(180, self.window_width - 260),
+                width=max(6, self.slider_width),
+                sliderlength=max(8, self.slider_height),
+                bd=0,
+                highlightthickness=0,
+                troughcolor="#cccccc",
+            )
+            scale.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            self._exposure_scales[camera_name] = scale
+
+        for model_name, title in (("bean", "BEAN CONF"), ("digit", "DIGIT CONF")):
+            row = tk.Frame(self.sliders_frame)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
+                side=tk.LEFT, padx=(0, 2)
+            )
+            value = float(self.cfg["models"][model_name].get("conf_thres", 0.7))
+            var = tk.DoubleVar(master=self.root, value=value)
+            tk.Scale(
+                row,
+                from_=0.05,
+                to=0.95,
+                resolution=0.05,
+                orient=tk.HORIZONTAL,
+                variable=var,
+                command=lambda current, name=model_name: self._set_model_confidence(
+                    name, current
+                ),
+                showvalue=True,
+                length=max(180, self.window_width - 180),
+                width=max(6, self.slider_width),
+                sliderlength=max(8, self.slider_height),
+                font=font,
+                bd=0,
+                highlightthickness=0,
+                troughcolor="#cccccc",
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self._refresh_exposure_control_states()
+
+    def _camera_for_name(self, camera_name):
+        return self.cam_bean if camera_name == "bean" else self.cam_digit
+
+    def _set_camera_auto_exposure(self, camera_name, enabled):
+        enabled = bool(enabled)
+        self.cfg["cameras"][camera_name]["auto_exposure"] = enabled
+        setter = getattr(self._camera_for_name(camera_name), "set_auto_exposure", None)
+        if setter is not None:
+            setter(enabled)
+        self._refresh_exposure_control_states()
+
+    def _set_camera_exposure(self, camera_name, value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            logging.warning("Invalid %s camera exposure value: %r", camera_name, value)
+            return
+
+        self.cfg["cameras"][camera_name]["exposure"] = value
+        if not self.cfg["cameras"][camera_name].get("auto_exposure", True):
+            setter = getattr(self._camera_for_name(camera_name), "set_exposure", None)
+            if setter is not None:
+                setter(value)
+
+    def _set_model_confidence(self, model_name, value):
+        value = round(float(value), 2)
+        self.cfg["models"][model_name]["conf_thres"] = value
+        model = self.bean_model if model_name == "bean" else self.digit_model
+        if model is not None:
+            model.conf_thres = value
+
+    def _refresh_exposure_control_states(self):
+        for camera_name, scale in self._exposure_scales.items():
+            auto_var = self._auto_exposure_vars[camera_name]
+            scale.config(state=tk.DISABLED if auto_var.get() else tk.NORMAL)
+
+    def _set_settings_layout(self, enabled):
+        if enabled == self._settings_layout_active:
+            return
+        self._settings_layout_active = enabled
+        if enabled:
+            self._video_container.grid_remove()
+            self._control_frame.grid(row=0, column=0, sticky="nsew")
+            self.sliders_frame.pack_configure(fill=tk.BOTH, expand=True)
+        else:
+            self._control_frame.grid(row=1, column=0, sticky="ew")
+            self._video_container.grid()
+            self.sliders_frame.pack_configure(fill=tk.X, expand=False)
+
     def _set_mode(self, mode):
         if mode == self.mode:
             return
         super()._set_mode(mode)
         # Clear stale detection results so the new view doesn't briefly show
         # overlay from a previous calibration session.
-        with self._result_lock:
-            self._latest_dets[mode] = None
-            self._latest_names[mode] = None
+        if mode in self._latest_dets:
+            with self._result_lock:
+                self._latest_dets[mode] = None
+                self._latest_names[mode] = None
+        self._set_settings_layout(mode == "settings")
         self._update_button_appearance()
         self._create_sliders(mode)
 
@@ -328,9 +485,15 @@ class CalibrationUI(CameraViewer):
         if self.mode == "bean":
             self._bean_button.config(bg="#00aa00", relief=tk.SUNKEN)
             self._digit_button.config(bg="#555555", relief=tk.RAISED)
-        else:
+            self._settings_button.config(bg="#555555", relief=tk.RAISED)
+        elif self.mode == "digit":
             self._bean_button.config(bg="#555555", relief=tk.RAISED)
             self._digit_button.config(bg="#0066cc", relief=tk.SUNKEN)
+            self._settings_button.config(bg="#555555", relief=tk.RAISED)
+        else:
+            self._bean_button.config(bg="#555555", relief=tk.RAISED)
+            self._digit_button.config(bg="#555555", relief=tk.RAISED)
+            self._settings_button.config(bg="#0066cc", relief=tk.SUNKEN)
 
     def _set_line(self, group, key, value):
         # Update in-memory config only — write to disk happens on explicit SAVE.
@@ -483,6 +646,73 @@ class CompetitionUI(CalibrationUI):
 
     # ── dual-camera capture ────────────────────────────────────────────
 
+    @staticmethod
+    def _inferred_label(mode, zone, value):
+        """Return the on-frame label for a logically completed zone."""
+        if mode == "bean":
+            names = {1: "YELLOW", 2: "GREEN", 3: "WHITE"}
+            value_text = names.get(value, str(value))
+        else:
+            value_text = str(value)
+        return f"INFER Z{zone}: {value_text}"
+
+    def _draw_inferred_zone_labels(self, frame, zone_results, mode):
+        """Draw virtual labels for inferred zones that have no detection box."""
+        if not zone_results:
+            return
+
+        height, width = frame.shape[:2]
+        if mode == "bean":
+            boundaries = (
+                0,
+                self.cfg["lines"]["bean"]["left_x"],
+                self.cfg["lines"]["bean"]["right_x"],
+                width,
+            )
+            first_zone = 1
+        else:
+            digit_lines = self.cfg["lines"]["digit"]
+            boundaries = (
+                0,
+                digit_lines["x1"],
+                digit_lines["x2"],
+                digit_lines["x3"],
+                digit_lines["x4"],
+                width,
+            )
+            first_zone = 4
+
+        for zone, result in sorted(zone_results.items()):
+            value, source, _confidence = result
+            if source != "inferred":
+                continue
+
+            index = zone - first_zone
+            if not 0 <= index < len(boundaries) - 1:
+                continue
+
+            text = self._inferred_label(mode, zone, value)
+            (text_w, text_h), baseline = cv2.getTextSize(
+                text, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2
+            )
+            center_x = (boundaries[index] + boundaries[index + 1]) // 2
+            x = max(4, min(width - text_w - 4, center_x - text_w // 2))
+            y = max(
+                text_h + 4,
+                min(height - baseline - 4, height // 2 + text_h // 2),
+            )
+            cv2.rectangle(
+                frame,
+                (x - 3, y - text_h - 5),
+                (x + text_w + 3, y + baseline + 3),
+                (0, 0, 0),
+                -1,
+            )
+            cv2.putText(
+                frame, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX,
+                0.55, (0, 140, 255), 2,
+            )
+
     def _update_frame(self):
         """Capture both cameras every cycle so the competition always has fresh
         detections from both views for generate_frame()."""
@@ -491,6 +721,17 @@ class CompetitionUI(CalibrationUI):
 
         ok_b, frame_b = self.cam_bean.capture()
         ok_d, frame_d = self.cam_digit.capture()
+
+        if self.mode == "settings":
+            # Keep detection and serial output live while the settings page
+            # intentionally hides both camera previews.
+            if ok_b and frame_b is not None and self.bean_model is not None:
+                self._submit_frame_for_inference("bean", frame_b)
+            if ok_d and frame_d is not None and self.digit_model is not None:
+                self._submit_frame_for_inference("digit", frame_d)
+            if self._running:
+                self.root.after(30, self._update_frame)
+            return
 
         with self._result_lock:
             zone_results_b = dict(self._zone_results.get("bean", {}))
@@ -509,6 +750,7 @@ class CompetitionUI(CalibrationUI):
                         frame_b, dets_b, names_b,
                         zone_results=zone_results_b, mode="bean",
                     )
+            self._draw_inferred_zone_labels(frame_b, zone_results_b, "bean")
 
         if ok_d and frame_d is not None:
             self._draw_digit_lines(frame_d)
@@ -519,6 +761,7 @@ class CompetitionUI(CalibrationUI):
                         frame_d, dets_d, names_d,
                         zone_results=zone_results_d, mode="digit",
                     )
+            self._draw_inferred_zone_labels(frame_d, zone_results_d, "digit")
 
         # Show the active-mode camera, or bean camera by default.
         if self.mode == "digit" and ok_d and frame_d is not None:

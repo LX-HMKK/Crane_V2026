@@ -65,6 +65,7 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
             camera_cfg.get("buffer_size", 1),
             camera_cfg.get("fps"),
             auto_exposure=camera_cfg.get("auto_exposure", True),
+            exposure=camera_cfg.get("exposure"),
             grayscale=camera_cfg.get("grayscale", False),
         )
     except RuntimeError:

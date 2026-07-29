@@ -1,4 +1,6 @@
 import logging
+import shutil
+import subprocess
 
 import cv2
 import numpy as np
@@ -15,6 +17,7 @@ class Camera:
         buffer_size=1,
         fps=None,
         auto_exposure=True,
+        exposure=None,
         grayscale=False,
     ):
         self.device_index = device_index
@@ -32,14 +35,76 @@ class Camera:
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         self.grayscale = bool(grayscale)
 
-        # V4L2 auto exposure: 0.25 = manual, 0.75 = aperture priority (auto).
-        auto_exposure_value = 0.75 if auto_exposure else 0.25
+        self.auto_exposure = None
+        self.exposure = None
+        self.set_auto_exposure(auto_exposure)
+        if exposure is not None:
+            self.exposure = float(exposure)
+            if not auto_exposure:
+                self.set_exposure(exposure)
+
+    def set_auto_exposure(self, enabled):
+        """Set V4L2 auto exposure and return whether the driver accepted it."""
+        enabled = bool(enabled)
+        # These RDK USB cameras expose V4L2 menu values 1=manual, 3=auto.
+        # Use v4l2-ctl when available because OpenCV's 0.25/0.75 mapping is
+        # not applied consistently by their UVC driver.
+        v4l2_value = 3 if enabled else 1
+        if self._set_v4l2_control("auto_exposure", v4l2_value):
+            self.auto_exposure = enabled
+            return True
+
+        # Generic OpenCV fallback: 0.25 = manual, 0.75 = aperture priority.
+        auto_exposure_value = 0.75 if enabled else 0.25
         if not self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, auto_exposure_value):
             logging.warning(
                 "Failed to set auto_exposure=%s for camera %s",
-                auto_exposure,
-                device_index,
+                enabled,
+                self.device_index,
             )
+            return False
+        self.auto_exposure = enabled
+        return True
+
+    def set_exposure(self, value):
+        """Set the manual exposure value and return whether it was accepted."""
+        value = float(value)
+        if self._set_v4l2_control("exposure_time_absolute", int(round(value))):
+            self.exposure = value
+            return True
+
+        if not self.cap.set(cv2.CAP_PROP_EXPOSURE, value):
+            logging.warning(
+                "Failed to set exposure=%s for camera %s", value, self.device_index
+            )
+            return False
+        self.exposure = value
+        return True
+
+    def _set_v4l2_control(self, name, value):
+        """Set one control through v4l2-ctl, returning False when unavailable."""
+        if not isinstance(self.device_index, str) or not self.device_index.startswith("/dev/"):
+            return False
+        v4l2_ctl = shutil.which("v4l2-ctl")
+        if v4l2_ctl is None:
+            return False
+
+        result = subprocess.run(
+            [v4l2_ctl, "-d", self.device_index, "--set-ctrl", f"{name}={value}"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return True
+        logging.warning(
+            "v4l2-ctl failed for %s=%s on %s: %s",
+            name,
+            value,
+            self.device_index,
+            result.stderr.strip(),
+        )
+        return False
 
     def capture(self):
         ok, frame = self.cap.read()
@@ -72,6 +137,16 @@ class MockCamera:
         self.height = int(height)
         self.pattern = pattern
         self._counter = 0
+        self.auto_exposure = True
+        self.exposure = 0.0
+
+    def set_auto_exposure(self, enabled):
+        self.auto_exposure = bool(enabled)
+        return True
+
+    def set_exposure(self, value):
+        self.exposure = float(value)
+        return True
 
     def capture(self):
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)

@@ -13,6 +13,7 @@ cameras:
     fps: 15
     buffer_size: 1
     auto_exposure: true
+    exposure: 10000
     grayscale: false
   digit:
     device: /dev/crane_cam_digit
@@ -21,16 +22,17 @@ cameras:
     fps: 15
     buffer_size: 1
     auto_exposure: true
+    exposure: 166
     grayscale: true
 models:
   bean:
-    bin: assets/beans_v4.bin
+    bin: assets/beans_v5.bin
     cfg: assets/beans_v4_rdkx5_config.yaml
     pt: assets/beans_v4.pt
     conf_thres: 0.7
     iou_thres: 0.45
   digit:
-    bin: assets/num.bin
+    bin: assets/num_v6.bin
     cfg: assets/num_rdkx5_config.yaml
     pt: assets/num.pt
     conf_thres: 0.7

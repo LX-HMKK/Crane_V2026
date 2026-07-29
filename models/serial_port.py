@@ -133,6 +133,8 @@ class SerialThread:
         self._lock = threading.Lock()
         self._running = False
         self._thread = None
+        self._reported_missing_frame = False
+        self._reported_transmission = False
 
     # ── thread-safe properties (main thread ↔ serial thread) ──────────
 
@@ -173,14 +175,27 @@ class SerialThread:
         last_send = 0.0
         while self._running:
             try:
-                self._port.poll_start()
+                if self._port.poll_start():
+                    logging.info("Serial START received")
                 if self._port.is_start_active(self._start_timeout):
                     frame = self.current_frame
                     if frame is not None:
+                        self._reported_missing_frame = False
                         now = time.monotonic()
                         if now - last_send >= self._send_interval:
                             self._port.send_result(*frame)
+                            if not self._reported_transmission:
+                                logging.info("Serial result transmission active")
+                                self._reported_transmission = True
                             last_send = now
+                    elif not self._reported_missing_frame:
+                        logging.warning(
+                            "Serial START is active but no valid vision result is available"
+                        )
+                        self._reported_missing_frame = True
+                else:
+                    self._reported_missing_frame = False
+                    self._reported_transmission = False
             except Exception:
                 logging.exception("SerialThread send failed")
                 time.sleep(1.0)  # backoff on persistent fault
