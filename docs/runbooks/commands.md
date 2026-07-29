@@ -96,21 +96,29 @@ conda run --prefix /d/conda_envs/crane-clean python tests/test_serial_loopback.p
 ./scripts/watchdog.sh
 ```
 
-### x86 完整流程测试（无串口）
+### x86 完整流程测试（CompetitionUI + PyTorch，无串口）
 
-`main_amd64.py` 使用 `assets/*.pt` 进行 PyTorch 推理（依赖 `ultralytics`）。当前 `crane-clean` 环境已安装 GPU 版 `torch 2.5.1+cu121` 和 `ultralytics`，可直接运行：
+`main_amd64.py` 启动 CompetitionUI：双相机同时 PyTorch 推理 + 逻辑补全，支持校准 UI 的全部三页（`1`=豆子、`2`=数字、`3`=settings）。无需串口：
 
 ```bash
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
 ```
 
-按 `SPACE` 或 `s` 触发一次扫描，控制台打印 `SCAN RESULT: x y z` 或失败原因，按 `ESC` 退出。要单次扫描并退出，可加上 `--once`：
+使用静态测试图片代替相机：
+
+```bash
+conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py \
+  --bean-image data/image_for_test/beans_2.jpg \
+  --digit-image data/image_for_test/num_2.jpg
+```
+
+Settings 页（`3`）除相机曝光/模型置信度外，还包含 **BEAN INFER MAX**（0–3）和 **DIGIT INFER MAX**（0–5）滑块，控制逻辑补全推断上限。
+
+单次扫描并退出（无 UI）：
 
 ```bash
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
 ```
-
-如果当前环境没有 `ultralytics`，`main_amd64.py` 会自动退回到 camera-only 模式并打印 `SCAN FAILED: task generator unavailable`。
 
 ## 安装依赖（YOLOv5 训练）
 

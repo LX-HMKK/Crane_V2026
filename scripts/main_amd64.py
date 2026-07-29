@@ -30,7 +30,7 @@ from models.runtime import (
     scan_once,
     warmup_models,
 )
-from models.ui import CalibrationUI
+from models.ui import CompetitionUI
 
 
 def _open_image_camera(image_path, camera_cfg):
@@ -58,19 +58,23 @@ def run_calibration(cfg, cfg_path, mock=False, bean_image=None, digit_image=None
     try:
         bean_model = None
         digit_model = None
+        task_gen = None
         try:
             bean_model, digit_model = load_pt_models(cfg)
+            task_gen = create_task_generator(cfg, bean_model, digit_model)
         except EnvironmentError:
             logging.warning(
                 "PyTorch models not available; running UI in camera-only mode"
             )
 
-        ui = CalibrationUI(
+        ui = CompetitionUI(
             cfg_path,
             cam_bean,
             cam_digit,
             bean_model,
             digit_model,
+            task_gen=task_gen,
+            serial_thread=None,
         )
         ui.run()
     finally:

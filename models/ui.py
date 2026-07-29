@@ -416,6 +416,37 @@ class CalibrationUI(CameraViewer):
                 troughcolor="#cccccc",
             ).pack(side=tk.LEFT, fill=tk.X, expand=True)
 
+        # ── 逻辑补全推断上限 ──────────────────────────────────────────
+        for logic_key, title, max_val in (
+            ("max_inferred_beans", "BEAN INFER MAX", 3),
+            ("max_inferred_digits", "DIGIT INFER MAX", 5),
+        ):
+            row = tk.Frame(self.sliders_frame)
+            row.pack(fill=tk.X, pady=1)
+            tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
+                side=tk.LEFT, padx=(0, 2)
+            )
+            logic_cfg = self.cfg.get("logic", {})
+            value = int(logic_cfg.get(logic_key, 1))
+            var = tk.IntVar(master=self.root, value=value)
+            tk.Scale(
+                row,
+                from_=0,
+                to=max_val,
+                resolution=1,
+                orient=tk.HORIZONTAL,
+                variable=var,
+                command=lambda current, k=logic_key: self._set_logic_limit(k, current),
+                showvalue=True,
+                length=max(180, self.window_width - 180),
+                width=max(6, self.slider_width),
+                sliderlength=max(8, self.slider_height),
+                font=font,
+                bd=0,
+                highlightthickness=0,
+                troughcolor="#cccccc",
+            ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
         self._refresh_exposure_control_states()
 
     def _camera_for_name(self, camera_name):
@@ -448,6 +479,10 @@ class CalibrationUI(CameraViewer):
         model = self.bean_model if model_name == "bean" else self.digit_model
         if model is not None:
             model.conf_thres = value
+
+    def _set_logic_limit(self, key, value):
+        """Update logic completion threshold in config."""
+        self.cfg.setdefault("logic", {})[key] = int(value)
 
     def _refresh_exposure_control_states(self):
         for camera_name, scale in self._exposure_scales.items():
@@ -798,7 +833,7 @@ class CompetitionUI(CalibrationUI):
 
     def _on_inference_done(self, mode, dets):
         """After each inference, try to generate a task frame from both cameras."""
-        if self.task_gen is None or self.serial is None:
+        if self.task_gen is None:
             return
 
         with self._result_lock:
@@ -824,7 +859,8 @@ class CompetitionUI(CalibrationUI):
                 self._zone_results["bean"] = bean_results
                 self._zone_results["digit"] = digit_results
             if frame != self._last_frame:
-                self.serial.current_frame = frame
+                if self.serial is not None:
+                    self.serial.current_frame = frame
                 self._last_frame = frame
                 inferred = sum(
                     1 for r in (bean_results | digit_results).values()
@@ -837,7 +873,8 @@ class CompetitionUI(CalibrationUI):
         else:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 10:
-                self.serial.current_frame = None
+                if self.serial is not None:
+                    self.serial.current_frame = None
                 logging.error(
                     "generate_frame failed %d times, clearing result: %s",
                     self._consecutive_failures, reason,

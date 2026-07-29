@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 ## 项目概述
 
-2026 物流技术创意赛视觉目标检测工作空间：YOLOv5 训练/导出工具（`tools/yolov5/`）+ RDK X5 视觉运行时（`models/`、`scripts/`、`configs/`）。双 USB 相机 + 两路 YOLO11 BPU `.bin` 模型 + 串口，向下位机发送 12 字节结果帧。
+2026 物流技术创意赛视觉目标检测工作空间：RDK X5 视觉运行时（`models/`、`scripts/`、`configs/`）。双 USB 相机 + 两路 YOLO11 BPU `.bin` 模型 + 串口，向下位机发送 12 字节结果帧。
 
 > 板端推理以 `docs/guides/RDKx5_Bin_Inference.md` 为准；训练/导出以 `tools/yolov5/` 为准。
 
@@ -12,11 +12,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 ```text
 assets/            # 训练好的模型产物（.pt、.onnx、.bin）
-                   #   num.*      – 数字检测器
-                   #   beans_v4.* – 豆子成熟度检测器
+                   #   num.* / num_v6.bin – 数字检测器
+                   #   beans_v4.* / beans_v5.bin – 豆子成熟度检测器
                    #   *_rdkx5_config.yaml – BPU 部署配置
 configs/           # 运行时配置
                    #   vision.yaml – 串口、相机、模型、辅助线、映射
+                   #   vision_1024x600_test.yaml – 1024×600 备选配置
                    #   .gitkeep
 data/              # 数据集（YOLO 格式：images/ + labels/ + dataset.yaml）
                    #   dataset3/       – 原始数字图片
@@ -32,24 +33,28 @@ docs/              # 部署与运行时文档
                    #     RDKx5_Bin_Inference.md   – YOLO11 BPU 板端工作流
                    #     vision_runtime.md        – 运行时入口、状态机与分区映射规则
 models/            # 视觉运行时源码
+                   #   camera_viewer.py – CameraViewer 基类
+                   #   ui.py – CalibrationUI(CameraViewer) + CompetitionUI(CalibrationUI)
                    #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
                    #   bean_model.py, digit_model.py, camera.py, pt_model.py
                    #   serial_port.py  – SerialPort + SerialThread（后台串口）
                    #   task_generator.py – 分区聚合 + 逻辑补全
                    #   logic_completion.py – 置信度排列评分 + 缺区推断
-                   #   mapping.py, ui.py – CalibrationUI + CompetitionUI
+                   #   mapping.py, runtime.py – 入口共享助手
 scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 竞赛模式入口
-                   #   main_amd64.py – x86 本机完整流程测试入口
+                   #   main_amd64.py – x86 双相机 PyTorch 推理 + 逻辑补全（CompetitionUI）
                    #   watchdog.sh – main_arm64.py 自动重启脚本
                    #   .gitkeep
 tests/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
-                   #   calibrate.py              – 校准 UI 入口
-                   #   send_test_frame.py        – 串口测试帧发送工具
-                   #   test_camera_view.py       – 双相机画面检查
-                   #   test_inference_ui.py      – 双相机推理检查
-                   #   test_serial_loopback.py   – 串口回环/协议测试
-                   #   test_logic_completion.py  – 逻辑补全模块测试
+                   #   calibrate.py               – 校准 UI 入口
+                   #   send_test_frame.py         – 串口测试帧发送工具
+                   #   test_camera_view.py        – 双相机画面检查
+                   #   test_inference_ui.py       – 双相机推理检查
+                   #   test_serial_loopback.py    – 串口回环/协议测试
+                   #   test_logic_completion.py   – 逻辑补全模块测试
+                   #   test_settings_controls.py  – 校准控件单元测试
+                   #   test_ui_completion.py      – 推断标签渲染测试
 requirements.txt   # 运行时/测试依赖
 README.md          # 项目概览（侧重视觉模块）
 tools/yolov5/      # 内嵌 YOLOv5 仓库（train.py、detect.py、val.py、export.py 等）
@@ -64,7 +69,7 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 `main_arm64.py` 使用 3 线程模型：
 
 | 线程 | 类 | 职责 |
-|---|---|---|
+| --- | --- | --- |
 | 主线程 (Tkinter) | `CompetitionUI` | 双相机同时捕获 + 辅助线 + 检测框 overlay |
 | 推理 worker (daemon) | `CalibrationUI._inference_worker` | `model.predict()` → `generate_frame_with_completion()` → `serial.current_frame` |
 | 串口线程 (daemon) | `SerialThread` | `poll_start()` @200Hz → `send_result()` @20Hz |
@@ -88,6 +93,12 @@ conda run --prefix /d/conda_envs/crane-clean python tests/calibrate.py --mock-ca
 
 # 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py
+
+# x86 完整流程测试（CompetitionUI，PyTorch 推理 + 逻辑补全 + 无串口）
+python scripts/main_amd64.py --mock-cameras
+
+# 静态图片测试（x86 PyTorch）
+python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digit-image data/image_for_test/num_2.jpg
 
 # 独立功能测试（x86 / RDK X5 均可运行）
 python tests/test_camera_view.py           # 只测相机画面与摆放

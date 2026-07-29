@@ -40,6 +40,10 @@ def _settings_ui():
             "bean": {"conf_thres": 0.7},
             "digit": {"conf_thres": 0.7},
         },
+        "logic": {
+            "max_inferred_beans": 1,
+            "max_inferred_digits": 2,
+        },
     }
     ui.cam_bean = FakeCamera()
     ui.cam_digit = FakeCamera()
@@ -86,3 +90,28 @@ def test_settings_update_runtime_and_persistable_config():
     assert ui.bean_model.conf_thres == 0.65
     assert ui.cfg["models"]["digit"]["conf_thres"] == 0.8
     assert ui.digit_model.conf_thres == 0.8
+
+
+def test_logic_limit_sliders_update_cfg():
+    """Setter writes max_inferred_beans / max_inferred_digits into cfg["logic"]."""
+    ui = _settings_ui()
+
+    ui._set_logic_limit("max_inferred_beans", 2)
+    ui._set_logic_limit("max_inferred_digits", 4)
+
+    assert ui.cfg["logic"]["max_inferred_beans"] == 2
+    assert ui.cfg["logic"]["max_inferred_digits"] == 4
+    assert isinstance(ui.cfg["logic"]["max_inferred_beans"], int)
+    assert isinstance(ui.cfg["logic"]["max_inferred_digits"], int)
+
+
+def test_logic_limit_slider_string_to_int_conversion():
+    """Scale callbacks pass strings; ensure int coercion."""
+    ui = _settings_ui()
+
+    ui._set_logic_limit("max_inferred_beans", "2")
+    ui._set_logic_limit("max_inferred_digits", "3")
+
+    assert ui.cfg["logic"]["max_inferred_beans"] == 2
+    assert ui.cfg["logic"]["max_inferred_digits"] == 3
+    assert isinstance(ui.cfg["logic"]["max_inferred_beans"], int)
