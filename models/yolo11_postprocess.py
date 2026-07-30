@@ -48,16 +48,17 @@ def _make_anchors(imgsz, strides):
     return np.concatenate(anchors, axis=0)
 
 
-def _dfl_decode(pred_dfl, reg_max):
+def _dfl_decode(pred_dfl, reg_max, proj=None):
     """Decode Distribution Focal Loss output to l,t,r,b distances."""
     b = pred_dfl.shape[0]
     pred = pred_dfl.reshape(b, 4, reg_max)
     pred = _softmax(pred, axis=2)
-    proj = np.arange(reg_max, dtype=np.float32)
+    if proj is None:
+        proj = np.arange(reg_max, dtype=np.float32)
     return (pred * proj).sum(axis=2)  # (b, 4)
 
 
-def postprocess(outputs, cfg):
+def postprocess(outputs, cfg, anchors=None, dfl_proj=None):
     """
     Convert raw 6-head outputs to detections.
     outputs order: [s_bbox, m_bbox, l_bbox, s_cls, m_cls, l_cls]
@@ -74,38 +75,45 @@ def postprocess(outputs, cfg):
     conf_thres = cfg.get("conf_thres", 0.25)
     iou_thres = cfg.get("iou_thres", 0.45)
 
-    anchors = _make_anchors((imgsz_h, imgsz_w), strides)
+    if anchors is None:
+        anchors = _make_anchors((imgsz_h, imgsz_w), strides)
 
-    dfl_parts = []
-    cls_parts = []
-    for i, stride in enumerate(strides):
-        h = imgsz_h // stride
-        w = imgsz_w // stride
-        dfl_parts.append(outputs[i].reshape(-1, 4 * reg_max))
-        cls_parts.append(outputs[i + 3].reshape(-1, nc))
-
-    dfl_preds = np.concatenate(dfl_parts, axis=0)
+    cls_parts = [
+        outputs[i + 3].reshape(-1, nc)
+        for i, _stride in enumerate(strides)
+    ]
     cls_preds = np.concatenate(cls_parts, axis=0)
+    cls_sigmoid = 1.0 / (1.0 + np.exp(-cls_preds))
+    conf = cls_sigmoid.max(axis=1)
+    cls_id = cls_sigmoid.argmax(axis=1)
 
-    bbox = _dfl_decode(dfl_preds, reg_max)
+    mask = conf >= conf_thres
+    if not np.any(mask):
+        return np.zeros((0, 6), dtype=np.float32)
+
+    # Classification is much cheaper than DFL. Decode only candidates that
+    # passed the confidence threshold, preserving the original head order.
+    dfl_candidates = []
+    offset = 0
+    for i, _stride in enumerate(strides):
+        dfl_part = outputs[i].reshape(-1, 4 * reg_max)
+        next_offset = offset + len(dfl_part)
+        part_mask = mask[offset:next_offset]
+        if np.any(part_mask):
+            dfl_candidates.append(dfl_part[part_mask])
+        offset = next_offset
+
+    dfl_preds = np.concatenate(dfl_candidates, axis=0)
+    bbox = _dfl_decode(dfl_preds, reg_max, proj=dfl_proj)
+    anchors = anchors[mask]
 
     xyxy = np.empty_like(bbox)
     xyxy[:, 0] = anchors[:, 0] - bbox[:, 0]
     xyxy[:, 1] = anchors[:, 1] - bbox[:, 1]
     xyxy[:, 2] = anchors[:, 0] + bbox[:, 2]
     xyxy[:, 3] = anchors[:, 1] + bbox[:, 3]
-
-    cls_sigmoid = 1.0 / (1.0 + np.exp(-cls_preds))
-    conf = cls_sigmoid.max(axis=1)
-    cls_id = cls_sigmoid.argmax(axis=1)
-
-    mask = conf >= conf_thres
-    xyxy = xyxy[mask]
     conf = conf[mask]
     cls_id = cls_id[mask]
-
-    if len(xyxy) == 0:
-        return np.zeros((0, 6), dtype=np.float32)
 
     # Class-aware NMS: do not suppress boxes of different classes.
     keep = []

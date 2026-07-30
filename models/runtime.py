@@ -15,7 +15,6 @@ from models.bean_model import BeanModel
 from models.camera import Camera, MockCamera
 from models.digit_model import DigitModel
 from models.mapping import DEFAULT_BEAN_TO_DIGIT
-from models.pt_model import PtBeanModel, PtDigitModel
 from models.task_generator import TaskGenerator
 
 
@@ -102,6 +101,10 @@ def load_pt_models(cfg):
 
     Raises EnvironmentError if ultralytics is not installed.
     """
+    # Ultralytics/Torch is only needed for the x86 path. Deferring this import
+    # keeps the RDK BPU boot path free of its expensive optional dependencies.
+    from models.pt_model import PtBeanModel, PtDigitModel
+
     bean_model = PtBeanModel(
         cfg["models"]["bean"]["pt"],
         cfg["inference"],
@@ -132,10 +135,12 @@ def create_task_generator(cfg, bean_model, digit_model):
     )
 
 
-def warmup_models(cam_bean, cam_digit, bean_model, digit_model):
-    """Run a couple of inference cycles to warm up models."""
+def warmup_models(cam_bean, cam_digit, bean_model, digit_model, rounds=1):
+    """Run a small number of inference cycles to initialize BPU resources."""
+    if rounds < 1:
+        return
     logging.info("Warming up models...")
-    for _ in range(2):
+    for _ in range(rounds):
         ok, frame = cam_bean.capture()
         if ok and bean_model is not None:
             bean_model.predict(frame)
@@ -144,7 +149,9 @@ def warmup_models(cam_bean, cam_digit, bean_model, digit_model):
             digit_model.predict(frame)
 
 
-def scan_once_dets(bean_cam, digit_cam, bean_model, digit_model, cfg):
+def scan_once_dets(
+    bean_cam, digit_cam, bean_model, digit_model, cfg, *, on_capture_failure=None
+):
     """Capture frames, run inference, and return raw detections.
 
     Returns (all_bean_dets, all_digit_dets, reason). On camera failure
@@ -160,9 +167,12 @@ def scan_once_dets(bean_cam, digit_cam, bean_model, digit_model, cfg):
         ok_d, frame_d = digit_cam.capture()
         if not ok_b or not ok_d:
             failures += 1
-            logging.warning(
-                "Camera capture failure (bean_ok=%s, digit_ok=%s)", ok_b, ok_d
-            )
+            if on_capture_failure is None:
+                logging.warning(
+                    "Camera capture failure (bean_ok=%s, digit_ok=%s)", ok_b, ok_d
+                )
+            else:
+                on_capture_failure(ok_b, ok_d)
             continue
         if bean_model is not None:
             all_bean_dets.extend(bean_model.predict(frame_b))

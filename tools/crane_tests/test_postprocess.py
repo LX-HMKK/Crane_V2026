@@ -1,10 +1,12 @@
 import numpy as np
 import sys
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.yolo11_postprocess import letterbox, postprocess, scale_coords
+from models import yolo11_postprocess
+from models.yolo11_postprocess import _make_anchors, letterbox, postprocess, scale_coords
 
 
 def test_letterbox_preserves_aspect_ratio():
@@ -34,6 +36,71 @@ def test_postprocess_returns_empty_for_zero_tensors():
     ]
     dets = postprocess(outputs, cfg)
     assert dets.shape[0] == 0
+
+
+def test_postprocess_decodes_only_confident_candidates():
+    cfg = {
+        "imgsz": 640,
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.6,
+        "iou_thres": 0.45,
+    }
+    empty_outputs = [
+        np.zeros((1, 80, 80, 64), dtype=np.float32),
+        np.zeros((1, 40, 40, 64), dtype=np.float32),
+        np.zeros((1, 20, 20, 64), dtype=np.float32),
+        np.zeros((1, 80, 80, 3), dtype=np.float32),
+        np.zeros((1, 40, 40, 3), dtype=np.float32),
+        np.zeros((1, 20, 20, 3), dtype=np.float32),
+    ]
+
+    with mock.patch.object(
+        yolo11_postprocess,
+        "_dfl_decode",
+        wraps=yolo11_postprocess._dfl_decode,
+    ) as decode:
+        assert postprocess(empty_outputs, cfg).shape == (0, 6)
+        decode.assert_not_called()
+
+    outputs = make_yolo11_outputs(
+        [[300.0, 300.0, 320.0, 320.0, 0.9, 1]], cfg
+    )
+    with mock.patch.object(
+        yolo11_postprocess,
+        "_dfl_decode",
+        wraps=yolo11_postprocess._dfl_decode,
+    ) as decode:
+        result = postprocess(outputs, cfg)
+
+    assert result.shape[0] == 1
+    assert decode.call_count == 1
+    assert decode.call_args.args[0].shape == (1, 4 * cfg["reg_max"])
+
+
+def test_postprocess_accepts_cached_metadata():
+    cfg = {
+        "imgsz": 640,
+        "nc": 3,
+        "reg_max": 16,
+        "strides": [8, 16, 32],
+        "conf_thres": 0.6,
+        "iou_thres": 0.45,
+    }
+    outputs = make_yolo11_outputs(
+        [[300.0, 300.0, 320.0, 320.0, 0.9, 1]], cfg
+    )
+
+    expected = postprocess(outputs, cfg)
+    cached = postprocess(
+        outputs,
+        cfg,
+        anchors=_make_anchors(cfg["imgsz"], cfg["strides"]),
+        dfl_proj=np.arange(cfg["reg_max"], dtype=np.float32),
+    )
+
+    np.testing.assert_allclose(cached, expected)
 
 
 def test_scale_coords_reverses_letterbox():

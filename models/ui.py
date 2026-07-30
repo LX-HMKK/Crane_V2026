@@ -1,6 +1,6 @@
 import logging
-import queue
 import threading
+import time
 import tkinter as tk
 
 import cv2
@@ -36,6 +36,43 @@ DEFAULT_UI_CFG = {
     },
 }
 
+RESULT_FAILURE_LOG_INTERVAL_SEC = 5.0
+CAPTURE_FAILURE_BACKOFF_SEC = 0.05
+INFERENCE_RATE_LOG_INTERVAL_SEC = 5.0
+
+
+class _InferenceRateMeter:
+    """Count completed per-camera inferences over a bounded time window."""
+
+    def __init__(self, interval=INFERENCE_RATE_LOG_INTERVAL_SEC, started_at=None):
+        self.interval = float(interval)
+        self._window_started_at = (
+            time.monotonic() if started_at is None else float(started_at)
+        )
+        self._counts = {"bean": 0, "digit": 0}
+        self._lock = threading.Lock()
+
+    def record(self, mode, now=None):
+        """Record one completed inference and return rates when the window ends."""
+        now = time.monotonic() if now is None else float(now)
+        with self._lock:
+            self._counts[mode] += 1
+            elapsed = now - self._window_started_at
+            if elapsed < self.interval:
+                return None
+
+            bean_fps = self._counts["bean"] / elapsed
+            digit_fps = self._counts["digit"] / elapsed
+            rates = {
+                "bean_fps": bean_fps,
+                "digit_fps": digit_fps,
+                "total_fps": bean_fps + digit_fps,
+                "window_sec": elapsed,
+            }
+            self._counts = {"bean": 0, "digit": 0}
+            self._window_started_at = now
+            return rates
+
 
 class CalibrationUI(CameraViewer):
     """Tkinter-based calibration UI.
@@ -53,18 +90,27 @@ class CalibrationUI(CameraViewer):
         bean_model=None,
         digit_model=None,
         root=None,
+        cfg=None,
+        owns_cameras=True,
     ):
-        super().__init__(None, cfg_path, cam_bean, cam_digit, root=root)
+        self._owns_cameras = bool(owns_cameras)
+        super().__init__(cfg, cfg_path, cam_bean, cam_digit, root=root)
         if not self._window_ok:
             return
 
         self.bean_model = bean_model
         self.digit_model = digit_model
 
-        self._infer_queue = queue.Queue(maxsize=1)
+        # Keep one replaceable pending frame per camera. This prevents a fast
+        # camera from evicting the other camera's latest frame while inference
+        # is busy, without allowing a frame backlog to grow.
+        self._infer_pending = {"bean": None, "digit": None}
+        self._infer_pending_cv = threading.Condition()
+        self._next_inference_mode = "bean"
         self._result_lock = threading.Lock()
         self._latest_dets = {"bean": None, "digit": None}
         self._latest_names = {"bean": None, "digit": None}
+        self._inference_rate_meter = _InferenceRateMeter()
         self._infer_thread = None
         self._save_feedback_id = None
         self._settings_layout_active = False
@@ -132,35 +178,66 @@ class CalibrationUI(CameraViewer):
         """Signal the inference worker to stop and wait for it to finish."""
         if self._infer_thread is None or not self._infer_thread.is_alive():
             return
-        # Wake the worker if it is blocked waiting for a frame.
-        try:
-            self._infer_queue.put_nowait(None)
-        except queue.Full:
-            pass
+        # Wake the worker if it is blocked waiting for a pending frame.
+        with self._infer_pending_cv:
+            self._infer_pending_cv.notify_all()
         self._infer_thread.join(timeout=1.0)
         self._infer_thread = None
 
-    def _inference_worker(self):
-        """Consume frames from the queue and run inference in the background."""
-        while self._running:
-            try:
-                item = self._infer_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
-            if item is None:
-                break
-            mode, frame = item
+    def _stop_capture_workers(self):
+        """Hook for subclasses that own background camera capture workers."""
+        return True
+
+    def _take_pending_inference_frame(self):
+        """Take one latest frame, alternating cameras when both have work."""
+        with self._infer_pending_cv:
+            while self._running and all(
+                frame is None for frame in self._infer_pending.values()
+            ):
+                self._infer_pending_cv.wait(timeout=0.1)
             if not self._running:
-                break
+                return None
+
+            other_mode = "digit" if self._next_inference_mode == "bean" else "bean"
+            for mode in (self._next_inference_mode, other_mode):
+                frame = self._infer_pending[mode]
+                if frame is not None:
+                    self._infer_pending[mode] = None
+                    self._next_inference_mode = (
+                        "digit" if mode == "bean" else "bean"
+                    )
+                    return mode, frame
+        return None
+
+    def _inference_worker(self):
+        """Run inference on the latest pending frame from each camera."""
+        while self._running:
+            item = self._take_pending_inference_frame()
+            if item is None:
+                continue
+            mode, frame = item
             model = self.bean_model if mode == "bean" else self.digit_model
             if model is None:
                 continue
             try:
                 dets = model.predict(frame)
+                # Do not publish a result or update serial output after UI shutdown.
+                if not self._running:
+                    break
                 with self._result_lock:
                     self._latest_dets[mode] = dets
                     self._latest_names[mode] = model.names
                 self._on_inference_done(mode, dets)
+                rates = self._inference_rate_meter.record(mode)
+                if rates is not None:
+                    logging.info(
+                        "Inference throughput: bean=%.2f fps, digit=%.2f fps, "
+                        "total=%.2f fps (%.1fs window)",
+                        rates["bean_fps"],
+                        rates["digit_fps"],
+                        rates["total_fps"],
+                        rates["window_sec"],
+                    )
             except Exception as exc:
                 logging.error("Inference worker error (%s): %s", mode, exc)
 
@@ -176,18 +253,9 @@ class CalibrationUI(CameraViewer):
             return
         if self.bean_model is None and self.digit_model is None:
             return
-        try:
-            self._infer_queue.put_nowait((mode, frame.copy()))
-        except queue.Full:
-            # The worker is still busy; replace the stale pending frame.
-            try:
-                self._infer_queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._infer_queue.put_nowait((mode, frame.copy()))
-            except queue.Full:
-                pass
+        with self._infer_pending_cv:
+            self._infer_pending[mode] = frame.copy()
+            self._infer_pending_cv.notify()
 
     def _build_controls(self):
         """Add control panel below the video area created by CameraViewer."""
@@ -652,8 +720,10 @@ class CalibrationUI(CameraViewer):
         finally:
             self._running = False
             self._stop_inference_worker()
-            self.cam_bean.release()
-            self.cam_digit.release()
+            capture_workers_stopped = self._stop_capture_workers()
+            if self._owns_cameras and capture_workers_stopped:
+                self.cam_bean.release()
+                self.cam_digit.release()
 
 
 class CompetitionUI(CalibrationUI):
@@ -666,20 +736,138 @@ class CompetitionUI(CalibrationUI):
     so that generate_frame always has fresh detections from both views.
     """
 
-    def __init__(self, cfg_path, cam_bean, cam_digit, bean_model, digit_model,
-                 task_gen=None, serial_thread=None):
-        super().__init__(cfg_path, cam_bean, cam_digit, bean_model, digit_model)
+    def __init__(
+        self,
+        cfg_path,
+        cam_bean,
+        cam_digit,
+        bean_model,
+        digit_model,
+        task_gen=None,
+        serial_thread=None,
+        root=None,
+        cfg=None,
+        owns_cameras=True,
+        owns_serial=True,
+        start_serial=True,
+    ):
+        self._owns_serial = bool(owns_serial)
+        super().__init__(
+            cfg_path,
+            cam_bean,
+            cam_digit,
+            bean_model,
+            digit_model,
+            root=root,
+            cfg=cfg,
+            owns_cameras=owns_cameras,
+        )
         if not self._window_ok:
             return
         self.task_gen = task_gen
         self.serial = serial_thread
         self._last_frame = None
         self._consecutive_failures = 0
+        self._last_result_failure_log_at = None
         self._zone_results = {"bean": {}, "digit": {}}
-        if self.serial is not None:
+        self._capture_lock = threading.Lock()
+        self._capture_stop = threading.Event()
+        self._capture_threads = {}
+        self._captured_frames = {"bean": None, "digit": None}
+        self._capture_ready = {"bean": False, "digit": False}
+        self._capture_failure_logged = {"bean": False, "digit": False}
+        self._capture_sequences = {"bean": 0, "digit": 0}
+        self._submitted_capture_sequences = {"bean": 0, "digit": 0}
+        if self.serial is not None and start_serial:
             self.serial.start()
 
     # ── dual-camera capture ────────────────────────────────────────────
+
+    def _start_inference_worker(self):
+        self._start_capture_workers()
+        super()._start_inference_worker()
+
+    def _start_capture_workers(self):
+        """Start one persistent latest-frame reader for each camera."""
+        if self._capture_threads:
+            return
+
+        self._capture_stop.clear()
+        for mode, camera in (("bean", self.cam_bean), ("digit", self.cam_digit)):
+            thread = threading.Thread(
+                target=self._capture_worker,
+                args=(mode, camera),
+                name=f"crane-camera-{mode}",
+                daemon=True,
+            )
+            self._capture_threads[mode] = thread
+            thread.start()
+
+    @staticmethod
+    def _capture_interval(camera):
+        fps = getattr(camera, "target_fps", None)
+        if not isinstance(fps, (int, float)) or isinstance(fps, bool) or fps <= 0:
+            fps = getattr(camera, "fps", None)
+        if not isinstance(fps, (int, float)) or isinstance(fps, bool) or fps <= 0:
+            fps = 30.0
+        return 1.0 / float(fps)
+
+    def _capture_worker(self, mode, camera):
+        """Continuously replace one camera's raw-frame slot without queuing."""
+        interval = self._capture_interval(camera)
+        next_capture_at = time.monotonic()
+        while not self._capture_stop.is_set():
+            delay = next_capture_at - time.monotonic()
+            if delay > 0 and self._capture_stop.wait(delay):
+                break
+
+            try:
+                ok, frame = camera.capture()
+            except Exception as exc:
+                with self._capture_lock:
+                    self._capture_ready[mode] = False
+                    log_failure = not self._capture_failure_logged[mode]
+                    self._capture_failure_logged[mode] = True
+                if log_failure:
+                    logging.warning("Camera capture failed (%s): %s", mode, exc)
+                self._capture_stop.wait(CAPTURE_FAILURE_BACKOFF_SEC)
+                next_capture_at = time.monotonic()
+                continue
+
+            if not ok or frame is None:
+                with self._capture_lock:
+                    self._capture_ready[mode] = False
+                    log_failure = not self._capture_failure_logged[mode]
+                    self._capture_failure_logged[mode] = True
+                if log_failure:
+                    logging.warning("Camera capture returned no frame (%s)", mode)
+                self._capture_stop.wait(CAPTURE_FAILURE_BACKOFF_SEC)
+                next_capture_at = time.monotonic()
+                continue
+
+            with self._capture_lock:
+                self._captured_frames[mode] = frame
+                self._capture_ready[mode] = True
+                self._capture_failure_logged[mode] = False
+                self._capture_sequences[mode] += 1
+            next_capture_at += interval
+
+    def _latest_capture_snapshot(self, mode):
+        """Return a private copy of a camera's latest frame and sequence."""
+        with self._capture_lock:
+            frame = self._captured_frames[mode]
+            if not self._capture_ready[mode] or frame is None:
+                return False, None, self._capture_sequences[mode]
+            return True, frame.copy(), self._capture_sequences[mode]
+
+    def _submit_new_capture_for_inference(self, mode, frame, sequence):
+        """Submit each camera sequence at most once to the bounded worker slot."""
+        if not self.inference_overlay:
+            return
+        if sequence == self._submitted_capture_sequences[mode]:
+            return
+        self._submitted_capture_sequences[mode] = sequence
+        self._submit_frame_for_inference(mode, frame)
 
     @staticmethod
     def _inferred_label(mode, zone, value):
@@ -754,16 +942,16 @@ class CompetitionUI(CalibrationUI):
         if not self._running:
             return
 
-        ok_b, frame_b = self.cam_bean.capture()
-        ok_d, frame_d = self.cam_digit.capture()
+        ok_b, frame_b, seq_b = self._latest_capture_snapshot("bean")
+        ok_d, frame_d, seq_d = self._latest_capture_snapshot("digit")
 
         if self.mode == "settings":
             # Keep detection and serial output live while the settings page
             # intentionally hides both camera previews.
             if ok_b and frame_b is not None and self.bean_model is not None:
-                self._submit_frame_for_inference("bean", frame_b)
+                self._submit_new_capture_for_inference("bean", frame_b, seq_b)
             if ok_d and frame_d is not None and self.digit_model is not None:
-                self._submit_frame_for_inference("digit", frame_d)
+                self._submit_new_capture_for_inference("digit", frame_d, seq_d)
             if self._running:
                 self.root.after(30, self._update_frame)
             return
@@ -779,7 +967,7 @@ class CompetitionUI(CalibrationUI):
         if ok_b and frame_b is not None:
             self._draw_bean_lines(frame_b)
             if self.bean_model is not None:
-                self._submit_frame_for_inference("bean", frame_b)
+                self._submit_new_capture_for_inference("bean", frame_b, seq_b)
                 if dets_b is not None:
                     self._draw_detections(
                         frame_b, dets_b, names_b,
@@ -790,7 +978,7 @@ class CompetitionUI(CalibrationUI):
         if ok_d and frame_d is not None:
             self._draw_digit_lines(frame_d)
             if self.digit_model is not None:
-                self._submit_frame_for_inference("digit", frame_d)
+                self._submit_new_capture_for_inference("digit", frame_d, seq_d)
                 if dets_d is not None:
                     self._draw_detections(
                         frame_d, dets_d, names_d,
@@ -855,6 +1043,7 @@ class CompetitionUI(CalibrationUI):
 
         if frame is not None:
             self._consecutive_failures = 0
+            self._last_result_failure_log_at = None
             with self._result_lock:
                 self._zone_results["bean"] = bean_results
                 self._zone_results["digit"] = digit_results
@@ -875,21 +1064,52 @@ class CompetitionUI(CalibrationUI):
             if self._consecutive_failures >= 10:
                 if self.serial is not None:
                     self.serial.current_frame = None
-                logging.error(
-                    "generate_frame failed %d times, clearing result: %s",
-                    self._consecutive_failures, reason,
-                )
+                self._log_result_failure(reason)
             else:
                 logging.warning(
                     "generate_frame failed (%d/%d): %s",
                     self._consecutive_failures, 10, reason,
                 )
 
+    def _log_result_failure(self, reason):
+        now = time.monotonic()
+        if (
+            self._last_result_failure_log_at is not None
+            and now - self._last_result_failure_log_at < RESULT_FAILURE_LOG_INTERVAL_SEC
+        ):
+            return
+        logging.error(
+            "generate_frame failed %d times, clearing result: %s",
+            self._consecutive_failures,
+            reason,
+        )
+        self._last_result_failure_log_at = now
+
     # ── lifecycle ──────────────────────────────────────────────────────
+
+    def _stop_capture_workers(self):
+        """Stop capture before either camera can be released or handed off."""
+        threads = list(getattr(self, "_capture_threads", {}).values())
+        if not threads:
+            return True
+
+        self._capture_stop.set()
+        stopped = True
+        for thread in threads:
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                stopped = False
+
+        if stopped:
+            self._capture_threads = {}
+        else:
+            logging.warning("Camera capture workers did not stop before shutdown")
+        return stopped
 
     def _quit(self):
         self._running = False
         self._stop_inference_worker()
-        if self.serial is not None:
+        self._stop_capture_workers()
+        if self.serial is not None and self._owns_serial:
             self.serial.stop()
         self.root.destroy()

@@ -13,7 +13,7 @@ import yaml
 from unittest.mock import MagicMock
 
 from models.camera import MockCamera
-from models.ui import CalibrationUI
+from models.ui import CalibrationUI, CompetitionUI, _InferenceRateMeter
 from calibrate import run_calibration
 
 
@@ -218,6 +218,163 @@ def test_run_releases_cameras_on_exit(tmp_path, monkeypatch):
     ui.run()
     cam_bean.release.assert_called_once()
     cam_digit.release.assert_called_once()
+
+
+def test_run_keeps_borrowed_cameras_open_on_exit(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    cam_bean.capture.return_value = (True, frame)
+    cam_digit.capture.return_value = (True, frame)
+    root = MagicMock()
+
+    ui = CalibrationUI(
+        str(cfg_path), cam_bean, cam_digit, root=root, owns_cameras=False
+    )
+    ui.run()
+
+    cam_bean.release.assert_not_called()
+    cam_digit.release.assert_not_called()
+
+
+def test_competition_ui_keeps_borrowed_serial_open(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    serial = MagicMock()
+
+    ui = CompetitionUI(
+        str(cfg_path),
+        cam_bean,
+        cam_digit,
+        MagicMock(),
+        MagicMock(),
+        serial_thread=serial,
+        root=MagicMock(),
+        owns_cameras=False,
+        owns_serial=False,
+        start_serial=False,
+    )
+    ui._quit()
+
+    serial.start.assert_not_called()
+    serial.stop.assert_not_called()
+    cam_bean.release.assert_not_called()
+    cam_digit.release.assert_not_called()
+
+
+def test_competition_starts_one_capture_worker_per_camera(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    started = []
+
+    class RecordingThread:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.name, self.args))
+
+        def join(self, timeout=None):
+            del timeout
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr("models.ui.threading.Thread", RecordingThread)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    ui._start_capture_workers()
+    ui._stop_capture_workers()
+
+    assert [name for name, _args in started] == [
+        "crane-camera-bean", "crane-camera-digit",
+    ]
+    assert [args[0] for _name, args in started] == ["bean", "digit"]
+
+
+def test_competition_capture_interval_prefers_configured_target_fps():
+    camera = type("Camera", (), {"target_fps": 15.0, "fps": 25.0})()
+
+    assert CompetitionUI._capture_interval(camera) == 1.0 / 15.0
+
+
+def test_competition_uses_latest_snapshot_once_per_sequence(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    raw_bean = np.zeros((480, 640, 3), dtype=np.uint8)
+    raw_digit = np.zeros((480, 640, 3), dtype=np.uint8)
+    raw_bean_before = raw_bean.copy()
+    raw_digit_before = raw_digit.copy()
+    cam_bean = MagicMock()
+    cam_digit = MagicMock()
+    ui = CompetitionUI(
+        str(cfg_path), cam_bean, cam_digit, MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    submitted = []
+    monkeypatch.setattr(
+        ui,
+        "_submit_frame_for_inference",
+        lambda mode, frame: submitted.append((mode, frame)),
+    )
+    with ui._capture_lock:
+        ui._captured_frames["bean"] = raw_bean
+        ui._captured_frames["digit"] = raw_digit
+        ui._capture_ready = {"bean": True, "digit": True}
+        ui._capture_sequences = {"bean": 1, "digit": 1}
+
+    ui._running = True
+    try:
+        ui._update_frame()
+        ui._update_frame()
+        with ui._capture_lock:
+            ui._capture_sequences["bean"] = 2
+        ui._update_frame()
+    finally:
+        ui._running = False
+
+    # UI reads protected slots; it never invokes the cameras itself.
+    cam_bean.capture.assert_not_called()
+    cam_digit.capture.assert_not_called()
+    # Each camera is submitted once per capture sequence, not per UI poll.
+    assert [mode for mode, _frame in submitted] == ["bean", "digit", "bean"]
+    # Drawing happens on private snapshots, never the worker-owned raw frames.
+    assert np.array_equal(raw_bean, raw_bean_before)
+    assert np.array_equal(raw_digit, raw_digit_before)
+    assert not np.shares_memory(submitted[0][1], raw_bean)
+    assert not np.shares_memory(submitted[1][1], raw_digit)
+
+
+def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
+    import logging
+
+    cfg_path = _write_cfg(tmp_path)
+    task_gen = MagicMock()
+    task_gen.generate_frame_with_completion.return_value = (None, {}, {}, "no frame")
+    ui = CompetitionUI(
+        str(cfg_path),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        task_gen=task_gen,
+    )
+    ui._latest_dets = {"bean": [], "digit": []}
+
+    with caplog.at_level(logging.ERROR):
+        for _ in range(12):
+            ui._on_inference_done("bean", [])
+
+    errors = [
+        record for record in caplog.records
+        if "generate_frame failed" in record.message
+    ]
+    assert len(errors) == 1
 
 
 def test_trackbar_limits_derived_from_camera_resolution(tmp_path):
@@ -580,6 +737,27 @@ def test_inference_overlay_can_be_disabled_via_config(tmp_path):
         str(cfg_path), cam_bean, cam_digit, bean_model=model, digit_model=model
     )
     assert ui.inference_overlay is False
+
+
+def test_inference_rate_meter_reports_per_camera_and_total_rates():
+    meter = _InferenceRateMeter(interval=2.0, started_at=10.0)
+
+    assert meter.record("bean", now=10.5) is None
+    assert meter.record("digit", now=11.0) is None
+    assert meter.record("bean", now=12.0) == {
+        "bean_fps": 1.0,
+        "digit_fps": 0.5,
+        "total_fps": 1.5,
+        "window_sec": 2.0,
+    }
+
+    assert meter.record("digit", now=13.0) is None
+    assert meter.record("digit", now=14.0) == {
+        "bean_fps": 0.0,
+        "digit_fps": 1.0,
+        "total_fps": 1.0,
+        "window_sec": 2.0,
+    }
 
 
 def test_mode_switch_clears_stale_detection_results(tmp_path):

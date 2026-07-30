@@ -1,8 +1,13 @@
 import cv2
 import numpy as np
 
-from models.bpu_loader import BpuModel
-from models.yolo11_postprocess import letterbox, postprocess, scale_coords
+from models.bpu_loader import BpuModel, _nv12_from_bgr
+from models.yolo11_postprocess import (
+    _make_anchors,
+    letterbox,
+    postprocess,
+    scale_coords,
+)
 
 
 class Yolo11Model:
@@ -20,6 +25,16 @@ class Yolo11Model:
         self.conf_thres = model_cfg.get("conf_thres", inference_cfg["conf_thres"])
         self.iou_thres = model_cfg.get("iou_thres", inference_cfg["iou_thres"])
         self.pad = inference_cfg.get("pad", 127)
+        self._post_cfg = {
+            "imgsz": self.imgsz,
+            "nc": self.nc,
+            "reg_max": self.reg_max,
+            "strides": self.strides,
+            "conf_thres": self.conf_thres,
+            "iou_thres": self.iou_thres,
+        }
+        self._anchors = _make_anchors(self.imgsz, self.strides)
+        self._dfl_proj = np.arange(self.reg_max, dtype=np.float32)
 
     @staticmethod
     def _normalize_names(names):
@@ -61,17 +76,25 @@ class Yolo11Model:
         letterboxed, scale, pad = letterbox(
             bgr_image, new_shape=new_shape, color=self.pad
         )
-        rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
-        tensor = np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.uint8)
-        outputs = self.bpu.infer(tensor)
-        post_cfg = {
-            "imgsz": self.imgsz,
-            "nc": self.nc,
-            "reg_max": self.reg_max,
-            "strides": self.strides,
-            "conf_thres": self.conf_thres,
-            "iou_thres": self.iou_thres,
-        }
-        dets = postprocess(outputs, post_cfg)
+        if getattr(self.bpu, "input_type", None) == "NV12":
+            # Match the legacy RGB/NCHW path, which cast input pixels before
+            # handing them to the uint8-only NV12 color converter.
+            if letterboxed.dtype != np.uint8:
+                letterboxed = letterboxed.astype(np.uint8)
+            outputs = self.bpu.infer_nv12(_nv12_from_bgr(letterboxed))
+        else:
+            rgb = cv2.cvtColor(letterboxed, cv2.COLOR_BGR2RGB)
+            tensor = np.transpose(rgb, (2, 0, 1)).astype(np.uint8)[None, ...]
+            outputs = self.bpu.infer(tensor)
+        # The settings UI updates these attributes at runtime. Keep the reusable
+        # postprocess config in sync without rebuilding immutable model metadata.
+        self._post_cfg["conf_thres"] = self.conf_thres
+        self._post_cfg["iou_thres"] = self.iou_thres
+        dets = postprocess(
+            outputs,
+            self._post_cfg,
+            anchors=self._anchors,
+            dfl_proj=self._dfl_proj,
+        )
         dets = scale_coords(dets, scale, pad, bgr_image.shape)
         return dets.tolist()

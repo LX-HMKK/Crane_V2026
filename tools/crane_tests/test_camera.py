@@ -1,4 +1,5 @@
 import sys
+from subprocess import TimeoutExpired
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -88,3 +89,15 @@ def test_camera_grayscale_option_outputs_three_channel_gray():
         assert np.all(frame[:, :, 0] == frame[:, :, 1])
         assert np.all(frame[:, :, 1] == frame[:, :, 2])
         cam.release()
+
+
+def test_camera_v4l2_timeout_falls_back_without_blocking():
+    cam = Camera.__new__(Camera)
+    cam.device_index = "/dev/video0"
+
+    with patch("models.camera.shutil.which", return_value="/usr/bin/v4l2-ctl"), \
+         patch(
+             "models.camera.subprocess.run",
+             side_effect=TimeoutExpired("v4l2-ctl", 2.0),
+         ):
+        assert cam._set_v4l2_control("auto_exposure", 3) is False

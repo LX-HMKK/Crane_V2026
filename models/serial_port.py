@@ -18,6 +18,9 @@ def open_serial_port(port, baudrate, timeout=0.05, **kwargs):
     """
     import serial
 
+    # A result frame is only 12 bytes; bound writes to the same short timeout
+    # as reads so a stalled UART cannot indefinitely block the serial worker.
+    kwargs.setdefault("write_timeout", timeout)
     return SerialPort(
         serial.Serial(
             port,
@@ -43,17 +46,21 @@ class SerialPort:
         """Read available RX bytes and update last_start_time if START_COMMAND is seen.
 
         Returns True if a new START_COMMAND was detected during this call.
-        The internal buffer is trimmed to at most len(START_COMMAND) - 1 bytes
-        so split commands are not lost.
+        All complete commands from a heartbeat burst are consumed at once. The
+        internal buffer keeps at most len(START_COMMAND) - 1 trailing bytes so
+        split commands are not lost or allowed to accumulate.
         """
         data = self.ser.read(self.ser.in_waiting or 0)
         if data:
             self._buf.extend(data)
 
-        idx = self._buf.find(START_COMMAND)
-        if idx >= 0:
+        last_idx = self._buf.rfind(START_COMMAND)
+        if last_idx >= 0:
             self.last_start_time = time.monotonic()
-            self._buf = self._buf[idx + len(START_COMMAND) :]
+            self._buf = self._buf[last_idx + len(START_COMMAND) :]
+            max_keep = len(START_COMMAND) - 1
+            if len(self._buf) > max_keep:
+                self._buf = self._buf[-max_keep:]
             return True
 
         # Keep only the trailing bytes that could form the start of a command.
@@ -109,8 +116,13 @@ class SerialPort:
             )
 
         frame = RESULT_HEAD + bytes(colors) + bytes(digits) + RESULT_TAIL
-        self.ser.write(frame)
-        self.ser.flush()
+        written = self.ser.write(frame)
+        if written != len(frame):
+            raise TimeoutError(
+                f"Serial write timed out after {written}/{len(frame)} result bytes"
+            )
+        # write_timeout bounds the kernel enqueue. Avoid flush(), whose driver
+        # drain can block indefinitely despite a finite write timeout.
 
     def close(self):
         self.ser.close()
@@ -175,8 +187,7 @@ class SerialThread:
         last_send = 0.0
         while self._running:
             try:
-                if self._port.poll_start():
-                    logging.info("Serial START received")
+                self._port.poll_start()
                 if self._port.is_start_active(self._start_timeout):
                     frame = self.current_frame
                     if frame is not None:

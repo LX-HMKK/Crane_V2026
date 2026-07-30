@@ -106,9 +106,19 @@ python tests/calibrate.py --mock-cameras
    ```
 3. 启动竞赛模式（看门狗自动重启）：
    ```bash
-   ./scripts/watchdog.sh
+   bash scripts/watchdog.sh
    ```
 4. 下位机发送 START 帧 → 视觉返回 12 字节结果帧。
+
+RDK 上电竞赛模式建议安装无界面 systemd 服务，避免等待 XFCE 桌面启动：
+
+```bash
+sudo bash scripts/install_crane_service.sh
+```
+
+服务先从 `main_arm64.py --headless --ui-when-ready` 启动结果通路，并在
+XFCE 可用后自动显示竞赛 UI。校准时先执行 `sudo systemctl stop
+crane-vision.service` 释放相机和串口。
 
 ## 配置
 

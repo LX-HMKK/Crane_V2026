@@ -10,7 +10,7 @@ cameras:
     device: /dev/crane_cam_beans
     width: 1280
     height: 720
-    fps: 15
+    fps: 30
     buffer_size: 1
     auto_exposure: true
     exposure: 10000
@@ -19,14 +19,14 @@ cameras:
     device: /dev/crane_cam_digit
     width: 1280
     height: 720
-    fps: 15
+    fps: 30
     buffer_size: 1
     auto_exposure: true
     exposure: 166
     grayscale: true
 models:
   bean:
-    bin: assets/beans_v5.bin
+    bin: assets/beans_v6.bin
     cfg: assets/beans_v4_rdkx5_config.yaml
     pt: assets/beans_v4.pt
     conf_thres: 0.7

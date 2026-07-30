@@ -1,18 +1,29 @@
 from pathlib import Path
 from unittest import mock
 
+import cv2
 import numpy as np
 import pytest
 import yaml
 
 from models.bean_model import BeanModel
-from models.bpu_loader import BpuModel
+from models.bpu_loader import BpuModel, _nv12_from_bgr, _nv12_from_rgb_nchw
 from models.digit_model import DigitModel
 
 
 def test_bpu_model_raises_on_x86():
     with pytest.raises(EnvironmentError):
         BpuModel("assets/num.bin", "assets/num_rdkx5_config.yaml")
+
+
+def test_direct_bgr_nv12_matches_legacy_rgb_nchw_conversion():
+    bgr = np.random.default_rng(7).integers(
+        0, 256, (640, 640, 3), dtype=np.uint8
+    )
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    nchw = np.transpose(rgb, (2, 0, 1))[None, ...].astype(np.uint8)
+
+    assert np.array_equal(_nv12_from_bgr(bgr), _nv12_from_rgb_nchw(nchw))
 
 
 def _write_cfg(tmp_path, **kwargs):
@@ -238,6 +249,53 @@ def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
         assert tensor.dtype == np.uint8
 
 
+def test_model_predict_uses_direct_nv12_input_when_supported(tmp_path):
+    cfg_path = tmp_path / "nv12.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    image = np.random.default_rng(9).integers(
+        0, 256, (640, 640, 3), dtype=np.uint8
+    )
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.input_type = "NV12"
+        bpu.infer_nv12.return_value = _fake_outputs_for_cfg(cfg)
+        MockBpu.return_value = bpu
+
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        assert model.predict(image) == []
+
+    bpu.infer.assert_not_called()
+    np.testing.assert_array_equal(
+        bpu.infer_nv12.call_args[0][0], _nv12_from_bgr(image)
+    )
+
+
+def test_model_predict_nv12_path_preserves_legacy_uint8_cast(tmp_path):
+    cfg_path = tmp_path / "nv12_float.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    image = np.full((640, 640, 3), 17.9, dtype=np.float32)
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.input_type = "NV12"
+        bpu.infer_nv12.return_value = _fake_outputs_for_cfg(cfg)
+        MockBpu.return_value = bpu
+
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        assert model.predict(image) == []
+
+    np.testing.assert_array_equal(
+        bpu.infer_nv12.call_args[0][0], _nv12_from_bgr(image.astype(np.uint8))
+    )
+
+
 def test_model_predict_uses_per_model_thresholds(tmp_path):
     cfg_path = tmp_path / "override.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
@@ -278,6 +336,31 @@ def test_model_predict_uses_per_model_thresholds(tmp_path):
         assert tensor[0, 0, :, :].mean() == 3.0
         assert tensor[0, 1, :, :].mean() == 2.0
         assert tensor[0, 2, :, :].mean() == 1.0
+
+
+def test_model_predict_uses_runtime_threshold_updates(tmp_path):
+    cfg_path = tmp_path / "runtime_thresholds.yaml"
+    cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
+    outputs = _fake_outputs_for_cfg(cfg)
+
+    with mock.patch("models.yolo11_model.BpuModel") as MockBpu, mock.patch(
+        "models.yolo11_model.postprocess",
+        return_value=np.zeros((0, 6), dtype=np.float32),
+    ) as postprocess_mock:
+        bpu = mock.MagicMock()
+        bpu.cfg = cfg
+        bpu.infer.return_value = outputs
+        MockBpu.return_value = bpu
+        model = BeanModel(
+            "assets/fake.bin", str(cfg_path), {"conf_thres": 0.6, "iou_thres": 0.45}
+        )
+        model.conf_thres = 0.72
+        model.iou_thres = 0.31
+        model.predict(np.zeros((640, 640, 3), dtype=np.uint8))
+
+    post_cfg = postprocess_mock.call_args.args[1]
+    assert post_cfg["conf_thres"] == 0.72
+    assert post_cfg["iou_thres"] == 0.31
 
 
 @pytest.mark.parametrize("model_class", [BeanModel, DigitModel])

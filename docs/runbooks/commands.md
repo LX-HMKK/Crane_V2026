@@ -1,5 +1,8 @@
 # 常用命令
 
+> RDK X5 日常启停、日志、更新和校准操作请见
+> [RDK X5 服务运维](rdk_service.md)。
+
 以下命令均在仓库根目录执行。YOLOv5 训练/验证/导出命令引用 `tools/yolov5/` 中的脚本。
 
 ## 开发/测试虚拟环境
@@ -93,7 +96,30 @@ conda run --prefix /d/conda_envs/crane-clean python tests/test_serial_loopback.p
 ### 自动重启竞赛模式
 
 ```bash
-./scripts/watchdog.sh
+bash scripts/watchdog.sh
+```
+
+### RDK X5 上电快速启动
+
+竞赛结果通路使用 systemd 服务，不等待 XFCE 桌面、终端或 Docker 完成启动。它先无界面生成串口结果，并在 XFCE 可用后自动显示竞赛 UI。首次部署或更新服务文件后，在 RDK 上以 root 执行：
+
+```bash
+bash scripts/install_crane_service.sh
+systemctl status crane-vision.service
+```
+
+服务在下次上电时会等待 `/dev/crane_cam_beans`、`/dev/crane_cam_digit`、`/dev/ttyS1` 和 `/dev/bpu` 就绪后，直接运行：
+
+```bash
+python3 scripts/main_arm64.py --headless --ui-when-ready
+```
+
+使用 `journalctl -u crane-vision.service -b` 查看 `cameras opened`、`models loaded`、`first valid result ready` 的启动耗时。需要进行校准或使用触摸 UI 时，先停止服务以释放相机和串口：
+
+```bash
+systemctl stop crane-vision.service
+python3 tests/calibrate.py
+systemctl start crane-vision.service
 ```
 
 ### x86 完整流程测试（CompetitionUI + PyTorch，无串口）

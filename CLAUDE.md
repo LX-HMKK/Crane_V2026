@@ -94,6 +94,9 @@ conda run --prefix /d/conda_envs/crane-clean python tests/calibrate.py --mock-ca
 # 竞赛模式（仅限 RDK X5）
 python3 scripts/main_arm64.py
 
+# 上电竞赛模式（systemd 无界面服务）
+systemctl start crane-vision.service
+
 # x86 完整流程测试（CompetitionUI，PyTorch 推理 + 逻辑补全 + 无串口）
 python scripts/main_amd64.py --mock-cameras
 
@@ -194,7 +197,7 @@ Remove-Item .git-msg
 
 ## 重要注意事项
 
-- `main_arm64.py` 竞赛模式使用 `CompetitionUI`（双相机同时捕获 + 逻辑补全 + 串口后台线程）。校准请使用 `tests/calibrate.py`，画面检查 `tests/test_camera_view.py`，推理检查 `tests/test_inference_ui.py`，串口 `tests/test_serial_loopback.py`，逻辑补全 `tests/test_logic_completion.py`。
+- `main_arm64.py` 默认使用 `CompetitionUI`（双相机同时捕获 + 逻辑补全 + 串口后台线程）；`crane-vision.service` 使用 `--headless --ui-when-ready`，先在不依赖 XFCE 的情况下启动结果通路，再自动显示同一进程的 CompetitionUI。校准前先停止该服务以释放相机和串口。校准请使用 `tests/calibrate.py`，画面检查 `tests/test_camera_view.py`，推理检查 `tests/test_inference_ui.py`，串口 `tests/test_serial_loopback.py`，逻辑补全 `tests/test_logic_completion.py`。
 - 请勿在开发机上以竞赛模式运行 `scripts/main_arm64.py`；完整 BPU 推理需要 RDKx5 镜像中的 `hobot_dnn`。`calibrate.py`、`test_camera_view.py`、`test_inference_ui.py`、`main_amd64.py`、`test_logic_completion.py` 和单元测试可在 x86 上安全运行。
 - `configs/vision.yaml` 是运行时唯一事实来源；在 UI 中调整的辅助线位置需点击 **SAVE** 按钮手动保存回该文件。
 - 逻辑补全配置 `logic.confidence_threshold` / `max_inferred_beans` / `max_inferred_digits` 控制推断容忍度。推断区 UI 橙色框，检测区黄色框。

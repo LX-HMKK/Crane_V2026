@@ -1,6 +1,7 @@
 import logging
 import shutil
 import subprocess
+import threading
 
 import cv2
 import numpy as np
@@ -21,6 +22,7 @@ class Camera:
         grayscale=False,
     ):
         self.device_index = device_index
+        self._io_lock = threading.RLock()
         self.cap = cv2.VideoCapture(device_index)
         if not self.cap.isOpened():
             raise RuntimeError(f"Cannot open camera device {device_index}")
@@ -29,6 +31,10 @@ class Camera:
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         if fps:
             self.cap.set(cv2.CAP_PROP_FPS, fps)
+        # Some UVC drivers ignore CAP_PROP_FPS and report a different active
+        # rate. Keep the configured rate so the latest-frame worker can avoid
+        # decoding more frames than the application requested.
+        self.target_fps = float(fps) if fps else None
         self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
         self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -45,41 +51,43 @@ class Camera:
 
     def set_auto_exposure(self, enabled):
         """Set V4L2 auto exposure and return whether the driver accepted it."""
-        enabled = bool(enabled)
-        # These RDK USB cameras expose V4L2 menu values 1=manual, 3=auto.
-        # Use v4l2-ctl when available because OpenCV's 0.25/0.75 mapping is
-        # not applied consistently by their UVC driver.
-        v4l2_value = 3 if enabled else 1
-        if self._set_v4l2_control("auto_exposure", v4l2_value):
+        with self._io_lock:
+            enabled = bool(enabled)
+            # These RDK USB cameras expose V4L2 menu values 1=manual, 3=auto.
+            # Use v4l2-ctl when available because OpenCV's 0.25/0.75 mapping is
+            # not applied consistently by their UVC driver.
+            v4l2_value = 3 if enabled else 1
+            if self._set_v4l2_control("auto_exposure", v4l2_value):
+                self.auto_exposure = enabled
+                return True
+
+            # Generic OpenCV fallback: 0.25 = manual, 0.75 = aperture priority.
+            auto_exposure_value = 0.75 if enabled else 0.25
+            if not self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, auto_exposure_value):
+                logging.warning(
+                    "Failed to set auto_exposure=%s for camera %s",
+                    enabled,
+                    self.device_index,
+                )
+                return False
             self.auto_exposure = enabled
             return True
 
-        # Generic OpenCV fallback: 0.25 = manual, 0.75 = aperture priority.
-        auto_exposure_value = 0.75 if enabled else 0.25
-        if not self.cap.set(cv2.CAP_PROP_AUTO_EXPOSURE, auto_exposure_value):
-            logging.warning(
-                "Failed to set auto_exposure=%s for camera %s",
-                enabled,
-                self.device_index,
-            )
-            return False
-        self.auto_exposure = enabled
-        return True
-
     def set_exposure(self, value):
         """Set the manual exposure value and return whether it was accepted."""
-        value = float(value)
-        if self._set_v4l2_control("exposure_time_absolute", int(round(value))):
+        with self._io_lock:
+            value = float(value)
+            if self._set_v4l2_control("exposure_time_absolute", int(round(value))):
+                self.exposure = value
+                return True
+
+            if not self.cap.set(cv2.CAP_PROP_EXPOSURE, value):
+                logging.warning(
+                    "Failed to set exposure=%s for camera %s", value, self.device_index
+                )
+                return False
             self.exposure = value
             return True
-
-        if not self.cap.set(cv2.CAP_PROP_EXPOSURE, value):
-            logging.warning(
-                "Failed to set exposure=%s for camera %s", value, self.device_index
-            )
-            return False
-        self.exposure = value
-        return True
 
     def _set_v4l2_control(self, name, value):
         """Set one control through v4l2-ctl, returning False when unavailable."""
@@ -89,12 +97,22 @@ class Camera:
         if v4l2_ctl is None:
             return False
 
-        result = subprocess.run(
-            [v4l2_ctl, "-d", self.device_index, "--set-ctrl", f"{name}={value}"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        try:
+            result = subprocess.run(
+                [v4l2_ctl, "-d", self.device_index, "--set-ctrl", f"{name}={value}"],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=2.0,
+            )
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                "v4l2-ctl timed out for %s=%s on %s",
+                name,
+                value,
+                self.device_index,
+            )
+            return False
         if result.returncode == 0:
             return True
         logging.warning(
@@ -107,7 +125,10 @@ class Camera:
         return False
 
     def capture(self):
-        ok, frame = self.cap.read()
+        # The UI capture worker and settings controls share this object.
+        # Keep VideoCapture operations serialized on the underlying device.
+        with self._io_lock:
+            ok, frame = self.cap.read()
         if not ok or frame is None:
             return ok, frame
 
@@ -126,7 +147,8 @@ class Camera:
         return ok, frame
 
     def release(self):
-        self.cap.release()
+        with self._io_lock:
+            self.cap.release()
 
 
 class MockCamera:

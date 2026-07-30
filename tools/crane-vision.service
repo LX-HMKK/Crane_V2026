@@ -1,0 +1,30 @@
+[Unit]
+Description=Crane vision early-start competition runtime
+# A regular service implicitly starts after basic.target, which delayed Python
+# until roughly 14 seconds into boot. The program waits for /dev/bpu, serial,
+# and camera nodes itself, so native imports can safely overlap the remaining
+# boot work as soon as local files (the interpreter and model assets) exist.
+DefaultDependencies=no
+After=local-fs.target
+Before=basic.target shutdown.target
+Conflicts=shutdown.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=sunrise
+Group=sunrise
+WorkingDirectory=/home/sunrise/Crane_WS
+Environment=PYTHONUNBUFFERED=1
+Environment=HOME=/home/sunrise
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/sunrise/.Xauthority
+Environment=XDG_RUNTIME_DIR=/run/user/1000
+# The runtime imports its heavy native modules first, then waits for device
+# nodes internally. This overlaps library loading with early hardware setup.
+ExecStart=/usr/bin/python3 /home/sunrise/Crane_WS/scripts/main_arm64.py --headless --ui-when-ready
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

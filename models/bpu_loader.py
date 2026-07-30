@@ -1,19 +1,38 @@
+import logging
+import time
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-try:
-    # RDK X5 newer images expose the API through hobot_dnn.pyeasy_dnn.
-    from hobot_dnn import pyeasy_dnn as dnn
-    HAS_HOBOT = True
-except Exception:
+dnn = None
+HAS_HOBOT = None
+
+
+def _load_hobot_dnn():
+    """Load the BPU binding only when a model is about to use it."""
+    global dnn, HAS_HOBOT
+    if HAS_HOBOT is not None:
+        return
+    started_at = time.monotonic()
     try:
-        import hobot_dnn as dnn
-        HAS_HOBOT = hasattr(dnn, "load")
+        # RDK X5 newer images expose the API through hobot_dnn.pyeasy_dnn.
+        from hobot_dnn import pyeasy_dnn as imported_dnn
+        dnn = imported_dnn
+        HAS_HOBOT = True
     except Exception:
-        dnn = None
-        HAS_HOBOT = False
+        try:
+            import hobot_dnn as imported_dnn
+            dnn = imported_dnn
+            HAS_HOBOT = hasattr(dnn, "load")
+        except Exception:
+            dnn = None
+            HAS_HOBOT = False
+    logging.info(
+        "BPU binding import completed in %.2fs (available=%s)",
+        time.monotonic() - started_at,
+        HAS_HOBOT,
+    )
 
 
 def _nv12_from_rgb_nchw(tensor):
@@ -28,19 +47,35 @@ def _nv12_from_rgb_nchw(tensor):
         raise ValueError(f"NV12 conversion requires even dimensions, got {h}x{w}")
     rgb = tensor[0].transpose(1, 2, 0)  # (H,W,3)
     i420 = cv2.cvtColor(rgb, cv2.COLOR_RGB2YUV_I420).ravel()
-    y = i420[: h * w]
-    u = i420[h * w : h * w + h * w // 4]
-    v = i420[h * w + h * w // 4 :]
+    return _i420_to_nv12(i420, h, w)
+
+
+def _i420_to_nv12(i420, h, w):
+    """Pack a flat I420 image as a flat NV12 image."""
+    area = h * w
+    y = i420[:area]
+    u = i420[area:area + area // 4]
+    v = i420[area + area // 4:]
     uv = np.empty((h * w // 2,), dtype=np.uint8)
     uv[0::2] = u
     uv[1::2] = v
     return np.concatenate([y, uv])
 
 
+def _nv12_from_bgr(bgr):
+    """Convert a BGR frame directly to the NV12 layout used by RDK models."""
+    h, w = bgr.shape[:2]
+    if h % 2 != 0 or w % 2 != 0:
+        raise ValueError(f"NV12 conversion requires even dimensions, got {h}x{w}")
+    i420 = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_I420).ravel()
+    return _i420_to_nv12(i420, h, w)
+
+
 class BpuModel:
     """Thin wrapper around hobot_dnn for RDKx5 BPU inference."""
 
     def __init__(self, bin_path, cfg_path):
+        _load_hobot_dnn()
         if not HAS_HOBOT:
             raise EnvironmentError(
                 "hobot_dnn is not available; BpuModel only runs on RDKx5"
@@ -58,6 +93,10 @@ class BpuModel:
             raise TypeError(
                 f"hobot_dnn.load returned {type(loaded).__name__}, expected a sequence"
             ) from exc
+        try:
+            self.input_type = self._bpu_model.inputs[0].properties.tensor_type
+        except Exception:
+            self.input_type = None
 
     @staticmethod
     def _load_cfg(cfg_path):
@@ -133,6 +172,17 @@ class BpuModel:
             if not isinstance(s, int) or s <= 0:
                 raise ValueError(f"each stride must be a positive integer, got {s!r}")
 
+    def _forward(self, tensor):
+        outputs = self._bpu_model.forward(tensor)
+        # RDK X5 pyeasy_dnn returns PyDNNTensor objects; unwrap the numpy buffer.
+        if (
+            isinstance(outputs, (list, tuple))
+            and outputs
+            and hasattr(outputs[0], "buffer")
+        ):
+            outputs = [o.buffer for o in outputs]
+        return outputs
+
     def infer(self, tensor):
         """tensor: np.ndarray uint8, shape (1, 3, H, W) NCHW"""
         import numpy as np
@@ -157,20 +207,25 @@ class BpuModel:
         if not tensor.flags["C_CONTIGUOUS"]:
             tensor = np.ascontiguousarray(tensor)
 
-        # RDK X5 NV12 models report NCHW shape but expect a flat NV12 buffer.
-        try:
-            input_type = self._bpu_model.inputs[0].properties.tensor_type
-        except Exception:
-            input_type = None
-        if input_type == "NV12":
+        # Legacy NCHW callers are converted for RDK X5 NV12 models.
+        if self.input_type == "NV12":
             tensor = _nv12_from_rgb_nchw(tensor)
 
-        outputs = self._bpu_model.forward(tensor)
-        # RDK X5 pyeasy_dnn returns PyDNNTensor objects; unwrap the numpy buffer.
-        if (
-            isinstance(outputs, (list, tuple))
-            and outputs
-            and hasattr(outputs[0], "buffer")
-        ):
-            outputs = [o.buffer for o in outputs]
-        return outputs
+        return self._forward(tensor)
+
+    def infer_nv12(self, tensor):
+        """Run an already-packed flat NV12 input without an RGB/NCHW roundtrip."""
+        if not isinstance(tensor, np.ndarray):
+            raise TypeError(f"tensor must be np.ndarray, got {type(tensor).__name__}")
+        if tensor.dtype != np.uint8:
+            raise TypeError(f"tensor dtype must be uint8, got {tensor.dtype}")
+        imgsz = self.cfg["imgsz"]
+        h, w = (imgsz, imgsz) if isinstance(imgsz, int) else tuple(imgsz)
+        expected_size = h * w * 3 // 2
+        if tensor.ndim != 1 or tensor.size != expected_size:
+            raise ValueError(
+                f"NV12 tensor must have {expected_size} bytes, got {tensor.shape}"
+            )
+        if not tensor.flags["C_CONTIGUOUS"]:
+            tensor = np.ascontiguousarray(tensor)
+        return self._forward(tensor)
