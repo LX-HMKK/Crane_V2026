@@ -66,12 +66,14 @@ tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
 
 ## 竞赛模式架构
 
-`main_arm64.py` 使用 3 线程模型：
+`main_arm64.py` 的竞赛 UI 使用独立的双路采集和双模型推理路径：
 
-| 线程 | 类 | 职责 |
+| 执行路径 | 类 | 职责 |
 | --- | --- | --- |
-| 主线程 (Tkinter) | `CompetitionUI` | 双相机同时捕获 + 辅助线 + 检测框 overlay |
-| 推理 worker (daemon) | `CalibrationUI._inference_worker` | `model.predict()` → `generate_frame_with_completion()` → `serial.current_frame` |
+| 主线程 (Tkinter) | `CompetitionUI` | 仅显示当前选中的相机预览、辅助线和检测框，不阻塞采集或推理 |
+| 相机 worker (daemon, 每路一个) | `CompetitionUI._capture_worker` | 持续采集，覆盖各自模型的最新帧槽，不建立帧队列 |
+| 推理 worker (daemon, 每模型一个) | `CalibrationUI._inference_worker` | 各自执行 `model.predict()` 并发布最新检测结果 |
+| 结果组合 (受 `_task_lock` 保护) | `CompetitionUI._on_inference_done()` | 按串口发送周期组合两路最新检测，更新 `serial.current_frame` |
 | 串口线程 (daemon) | `SerialThread` | `poll_start()` @200Hz → `send_result()` @20Hz |
 
 **逻辑补全**：`generate_frame_with_completion()` 在检测缺区/重复时，通过全局排列评分推断最可能的值。推断区在 UI 上以橙色框显示。推断超过上限（bean≤1, digit≤2）时拒绝发送。

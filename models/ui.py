@@ -37,6 +37,8 @@ DEFAULT_UI_CFG = {
 }
 
 RESULT_FAILURE_LOG_INTERVAL_SEC = 5.0
+RESULT_UPDATE_LOG_INTERVAL_SEC = 1.0
+DEFAULT_TASK_UPDATE_INTERVAL_SEC = 0.05
 CAPTURE_FAILURE_BACKOFF_SEC = 0.05
 INFERENCE_RATE_LOG_INTERVAL_SEC = 5.0
 
@@ -101,17 +103,16 @@ class CalibrationUI(CameraViewer):
         self.bean_model = bean_model
         self.digit_model = digit_model
 
-        # Keep one replaceable pending frame per camera. This prevents a fast
-        # camera from evicting the other camera's latest frame while inference
-        # is busy, without allowing a frame backlog to grow.
+        # Keep one replaceable pending frame per camera. Each model has its
+        # own worker, so an expensive inference can never block the other
+        # camera while stale frames remain disposable.
         self._infer_pending = {"bean": None, "digit": None}
         self._infer_pending_cv = threading.Condition()
-        self._next_inference_mode = "bean"
         self._result_lock = threading.Lock()
         self._latest_dets = {"bean": None, "digit": None}
         self._latest_names = {"bean": None, "digit": None}
         self._inference_rate_meter = _InferenceRateMeter()
-        self._infer_thread = None
+        self._infer_threads = {}
         self._save_feedback_id = None
         self._settings_layout_active = False
 
@@ -164,60 +165,71 @@ class CalibrationUI(CameraViewer):
         super()._quit()
 
     def _start_inference_worker(self):
-        """Start a background thread for model inference if models are loaded."""
+        """Start one background inference worker for each loaded model."""
         if not self.inference_overlay:
             return
-        if self.bean_model is None and self.digit_model is None:
+        if self._infer_threads:
             return
-        self._infer_thread = threading.Thread(
-            target=self._inference_worker, daemon=True
-        )
-        self._infer_thread.start()
+
+        for mode, model in (("bean", self.bean_model), ("digit", self.digit_model)):
+            if model is None:
+                continue
+            thread = threading.Thread(
+                target=self._inference_worker,
+                args=(mode,),
+                name=f"crane-inference-{mode}",
+                daemon=True,
+            )
+            self._infer_threads[mode] = thread
+            thread.start()
 
     def _stop_inference_worker(self):
-        """Signal the inference worker to stop and wait for it to finish."""
-        if self._infer_thread is None or not self._infer_thread.is_alive():
+        """Signal all inference workers to stop and wait for them to finish."""
+        threads = list(self._infer_threads.items())
+        if not threads:
             return
         # Wake the worker if it is blocked waiting for a pending frame.
         with self._infer_pending_cv:
+            self._infer_pending = {"bean": None, "digit": None}
             self._infer_pending_cv.notify_all()
-        self._infer_thread.join(timeout=1.0)
-        self._infer_thread = None
+
+        still_running = []
+        for mode, thread in threads:
+            thread.join(timeout=1.0)
+            if thread.is_alive():
+                still_running.append(mode)
+        if still_running:
+            logging.warning(
+                "Inference workers did not stop before shutdown: %s",
+                ", ".join(still_running),
+            )
+        else:
+            self._infer_threads = {}
 
     def _stop_capture_workers(self):
         """Hook for subclasses that own background camera capture workers."""
         return True
 
-    def _take_pending_inference_frame(self):
-        """Take one latest frame, alternating cameras when both have work."""
+    def _take_pending_inference_frame(self, mode):
+        """Take this model's latest frame without looking at the other camera."""
         with self._infer_pending_cv:
-            while self._running and all(
-                frame is None for frame in self._infer_pending.values()
-            ):
+            while self._running and self._infer_pending[mode] is None:
                 self._infer_pending_cv.wait(timeout=0.1)
             if not self._running:
                 return None
 
-            other_mode = "digit" if self._next_inference_mode == "bean" else "bean"
-            for mode in (self._next_inference_mode, other_mode):
-                frame = self._infer_pending[mode]
-                if frame is not None:
-                    self._infer_pending[mode] = None
-                    self._next_inference_mode = (
-                        "digit" if mode == "bean" else "bean"
-                    )
-                    return mode, frame
-        return None
+            frame = self._infer_pending[mode]
+            self._infer_pending[mode] = None
+            return frame
 
-    def _inference_worker(self):
-        """Run inference on the latest pending frame from each camera."""
+    def _inference_worker(self, mode):
+        """Run inference on the latest pending frame for one camera/model."""
+        model = self.bean_model if mode == "bean" else self.digit_model
+        if model is None:
+            return
         while self._running:
-            item = self._take_pending_inference_frame()
-            if item is None:
-                continue
-            mode, frame = item
-            model = self.bean_model if mode == "bean" else self.digit_model
-            if model is None:
+            frame = self._take_pending_inference_frame(mode)
+            if frame is None:
                 continue
             try:
                 dets = model.predict(frame)
@@ -248,14 +260,15 @@ class CalibrationUI(CameraViewer):
         """
 
     def _submit_frame_for_inference(self, mode, frame):
-        """Hand the latest frame to the inference worker without blocking the UI."""
+        """Hand the latest frame to its model worker without blocking the UI."""
         if not self.inference_overlay:
             return
-        if self.bean_model is None and self.digit_model is None:
+        model = self.bean_model if mode == "bean" else self.digit_model
+        if model is None:
             return
         with self._infer_pending_cv:
             self._infer_pending[mode] = frame.copy()
-            self._infer_pending_cv.notify()
+            self._infer_pending_cv.notify_all()
 
     def _build_controls(self):
         """Add control panel below the video area created by CameraViewer."""
@@ -769,6 +782,20 @@ class CompetitionUI(CalibrationUI):
         self._last_frame = None
         self._consecutive_failures = 0
         self._last_result_failure_log_at = None
+        self._last_result_update_log_at = None
+        self._task_lock = threading.Lock()
+        try:
+            self._task_update_interval = max(
+                0.0,
+                float(
+                    self.cfg.get("protocol", {}).get(
+                        "send_interval_sec", DEFAULT_TASK_UPDATE_INTERVAL_SEC
+                    )
+                ),
+            )
+        except (TypeError, ValueError):
+            self._task_update_interval = DEFAULT_TASK_UPDATE_INTERVAL_SEC
+        self._last_task_update_at = None
         self._zone_results = {"bean": {}, "digit": {}}
         self._capture_lock = threading.Lock()
         self._capture_stop = threading.Event()
@@ -777,7 +804,6 @@ class CompetitionUI(CalibrationUI):
         self._capture_ready = {"bean": False, "digit": False}
         self._capture_failure_logged = {"bean": False, "digit": False}
         self._capture_sequences = {"bean": 0, "digit": 0}
-        self._submitted_capture_sequences = {"bean": 0, "digit": 0}
         if self.serial is not None and start_serial:
             self.serial.start()
 
@@ -850,6 +876,10 @@ class CompetitionUI(CalibrationUI):
                 self._capture_ready[mode] = True
                 self._capture_failure_logged[mode] = False
                 self._capture_sequences[mode] += 1
+            # Feed inference from the camera thread rather than the Tk event
+            # loop. Rendering can run slower than capture without reducing
+            # the rate at which each model receives its newest frame.
+            self._submit_frame_for_inference(mode, frame)
             next_capture_at += interval
 
     def _latest_capture_snapshot(self, mode):
@@ -859,15 +889,6 @@ class CompetitionUI(CalibrationUI):
             if not self._capture_ready[mode] or frame is None:
                 return False, None, self._capture_sequences[mode]
             return True, frame.copy(), self._capture_sequences[mode]
-
-    def _submit_new_capture_for_inference(self, mode, frame, sequence):
-        """Submit each camera sequence at most once to the bounded worker slot."""
-        if not self.inference_overlay:
-            return
-        if sequence == self._submitted_capture_sequences[mode]:
-            return
-        self._submitted_capture_sequences[mode] = sequence
-        self._submit_frame_for_inference(mode, frame)
 
     @staticmethod
     def _inferred_label(mode, zone, value):
@@ -937,66 +958,48 @@ class CompetitionUI(CalibrationUI):
             )
 
     def _update_frame(self):
-        """Capture both cameras every cycle so the competition always has fresh
-        detections from both views for generate_frame()."""
+        """Render the active camera while capture workers feed both models."""
         if not self._running:
             return
 
-        ok_b, frame_b, seq_b = self._latest_capture_snapshot("bean")
-        ok_d, frame_d, seq_d = self._latest_capture_snapshot("digit")
-
         if self.mode == "settings":
-            # Keep detection and serial output live while the settings page
-            # intentionally hides both camera previews.
-            if ok_b and frame_b is not None and self.bean_model is not None:
-                self._submit_new_capture_for_inference("bean", frame_b, seq_b)
-            if ok_d and frame_d is not None and self.digit_model is not None:
-                self._submit_new_capture_for_inference("digit", frame_d, seq_d)
+            # Capture workers keep detection and serial output live while the
+            # settings page intentionally hides both camera previews.
+            if self._running:
+                self.root.after(30, self._update_frame)
+            return
+
+        preferred_mode = "digit" if self.mode == "digit" else "bean"
+        fallback_mode = "bean" if preferred_mode == "digit" else "digit"
+        ok, display_frame, _sequence = self._latest_capture_snapshot(preferred_mode)
+        display_mode = preferred_mode
+        if not ok or display_frame is None:
+            ok, display_frame, _sequence = self._latest_capture_snapshot(
+                fallback_mode
+            )
+            display_mode = fallback_mode
+        if not ok or display_frame is None:
             if self._running:
                 self.root.after(30, self._update_frame)
             return
 
         with self._result_lock:
-            zone_results_b = dict(self._zone_results.get("bean", {}))
-            dets_b = self._latest_dets.get("bean")
-            names_b = self._latest_names.get("bean")
-            zone_results_d = dict(self._zone_results.get("digit", {}))
-            dets_d = self._latest_dets.get("digit")
-            names_d = self._latest_names.get("digit")
+            zone_results = dict(self._zone_results.get(display_mode, {}))
+            dets = self._latest_dets.get(display_mode)
+            names = self._latest_names.get(display_mode)
 
-        if ok_b and frame_b is not None:
-            self._draw_bean_lines(frame_b)
-            if self.bean_model is not None:
-                self._submit_new_capture_for_inference("bean", frame_b, seq_b)
-                if dets_b is not None:
-                    self._draw_detections(
-                        frame_b, dets_b, names_b,
-                        zone_results=zone_results_b, mode="bean",
-                    )
-            self._draw_inferred_zone_labels(frame_b, zone_results_b, "bean")
-
-        if ok_d and frame_d is not None:
-            self._draw_digit_lines(frame_d)
-            if self.digit_model is not None:
-                self._submit_new_capture_for_inference("digit", frame_d, seq_d)
-                if dets_d is not None:
-                    self._draw_detections(
-                        frame_d, dets_d, names_d,
-                        zone_results=zone_results_d, mode="digit",
-                    )
-            self._draw_inferred_zone_labels(frame_d, zone_results_d, "digit")
-
-        # Show the active-mode camera, or bean camera by default.
-        if self.mode == "digit" and ok_d and frame_d is not None:
-            display_frame = frame_d
-        elif ok_b and frame_b is not None:
-            display_frame = frame_b
-        elif ok_d and frame_d is not None:
-            display_frame = frame_d
+        if display_mode == "bean":
+            self._draw_bean_lines(display_frame)
+            model = self.bean_model
         else:
-            if self._running:
-                self.root.after(30, self._update_frame)
-            return
+            self._draw_digit_lines(display_frame)
+            model = self.digit_model
+        if model is not None and dets is not None:
+            self._draw_detections(
+                display_frame, dets, names,
+                zone_results=zone_results, mode=display_mode,
+            )
+        self._draw_inferred_zone_labels(display_frame, zone_results, display_mode)
 
         try:
             avail_w = int(self._video_container.winfo_width())
@@ -1020,9 +1023,25 @@ class CompetitionUI(CalibrationUI):
     # ── task generation hook ───────────────────────────────────────────
 
     def _on_inference_done(self, mode, dets):
-        """After each inference, try to generate a task frame from both cameras."""
+        """After each inference, update the task state from both cameras."""
+        del mode, dets
         if self.task_gen is None:
             return
+
+        # Model workers may finish at the same time. Task state and serial
+        # output must still be updated as one ordered transaction.
+        with self._task_lock:
+            now = time.monotonic()
+            if (
+                self._last_task_update_at is not None
+                and now - self._last_task_update_at < self._task_update_interval
+            ):
+                return
+            self._last_task_update_at = now
+            self._update_task_from_latest_detections()
+
+    def _update_task_from_latest_detections(self):
+        """Generate and publish one task update while holding _task_lock."""
 
         with self._result_lock:
             bean_dets = self._latest_dets.get("bean")
@@ -1055,10 +1074,7 @@ class CompetitionUI(CalibrationUI):
                     1 for r in (bean_results | digit_results).values()
                     if r[1] == "inferred"
                 )
-                logging.info(
-                    "Result updated: C1-C3=%s, N4-N8=%s (%d inferred)",
-                    frame[:3], frame[3:], inferred,
-                )
+                self._log_result_update(frame, inferred)
         else:
             self._consecutive_failures += 1
             if self._consecutive_failures >= 10:
@@ -1084,6 +1100,20 @@ class CompetitionUI(CalibrationUI):
             reason,
         )
         self._last_result_failure_log_at = now
+
+    def _log_result_update(self, frame, inferred):
+        """Keep normal logs useful without writing once per inference frame."""
+        now = time.monotonic()
+        if (
+            self._last_result_update_log_at is not None
+            and now - self._last_result_update_log_at < RESULT_UPDATE_LOG_INTERVAL_SEC
+        ):
+            return
+        logging.info(
+            "Result updated: C1-C3=%s, N4-N8=%s (%d inferred)",
+            frame[:3], frame[3:], inferred,
+        )
+        self._last_result_update_log_at = now
 
     # ── lifecycle ──────────────────────────────────────────────────────
 

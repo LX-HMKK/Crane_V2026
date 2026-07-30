@@ -63,6 +63,10 @@ journalctl -u crane-vision.service -f | grep "Inference throughput"
 journalctl -u crane-vision.service -n 200 --no-pager | grep "Inference throughput"
 ```
 
+In competition mode, each camera capture worker writes directly to its model's latest-frame slot. Tk UI rendering is therefore independent of inference input rate; it only displays the active camera preview.
+
+On the verified 1280x720@30 fps dual-camera RDK setup, the expected operating range is about 18-20 fps per model and 36-39 fps total. Use the log above as the acceptance measurement after changes; illumination, detections, and camera drivers can affect the exact value.
+
 `bean` and `digit` are the completed rates for the two models; `total` is their sum. Cameras are configured for 30 fps. Each input retains only its newest frame, so insufficient inference capacity drops stale frames instead of accumulating latency.
 
 冷启动日志中会出现 `runtime imports completed`、`cameras opened`、

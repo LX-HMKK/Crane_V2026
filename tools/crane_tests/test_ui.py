@@ -1,4 +1,5 @@
 import sys
+import threading
 import time
 import tkinter as tk
 from pathlib import Path
@@ -298,56 +299,97 @@ def test_competition_starts_one_capture_worker_per_camera(tmp_path, monkeypatch)
     assert [args[0] for _name, args in started] == ["bean", "digit"]
 
 
+def test_calibration_starts_one_inference_worker_per_loaded_model(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    started = []
+
+    class RecordingThread:
+        def __init__(self, *, target, args, name, daemon):
+            self.target = target
+            self.args = args
+            self.name = name
+            self.daemon = daemon
+
+        def start(self):
+            started.append((self.name, self.args))
+
+        def join(self, timeout=None):
+            del timeout
+
+        def is_alive(self):
+            return False
+
+    monkeypatch.setattr("models.ui.threading.Thread", RecordingThread)
+    ui = CalibrationUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    ui._start_inference_worker()
+    ui._stop_inference_worker()
+
+    assert started == [
+        ("crane-inference-bean", ("bean",)),
+        ("crane-inference-digit", ("digit",)),
+    ]
+
+
 def test_competition_capture_interval_prefers_configured_target_fps():
     camera = type("Camera", (), {"target_fps": 15.0, "fps": 25.0})()
 
     assert CompetitionUI._capture_interval(camera) == 1.0 / 15.0
 
 
-def test_competition_uses_latest_snapshot_once_per_sequence(tmp_path, monkeypatch):
+def test_competition_capture_worker_submits_latest_frame_for_inference(
+    tmp_path, monkeypatch
+):
     cfg_path = _write_cfg(tmp_path)
     raw_bean = np.zeros((480, 640, 3), dtype=np.uint8)
-    raw_digit = np.zeros((480, 640, 3), dtype=np.uint8)
-    raw_bean_before = raw_bean.copy()
-    raw_digit_before = raw_digit.copy()
     cam_bean = MagicMock()
+    cam_bean.capture.return_value = (True, raw_bean)
     cam_digit = MagicMock()
     ui = CompetitionUI(
         str(cfg_path), cam_bean, cam_digit, MagicMock(), MagicMock(),
         root=MagicMock(), start_serial=False,
     )
     submitted = []
-    monkeypatch.setattr(
-        ui,
-        "_submit_frame_for_inference",
-        lambda mode, frame: submitted.append((mode, frame)),
-    )
-    with ui._capture_lock:
-        ui._captured_frames["bean"] = raw_bean
-        ui._captured_frames["digit"] = raw_digit
-        ui._capture_ready = {"bean": True, "digit": True}
-        ui._capture_sequences = {"bean": 1, "digit": 1}
+    original_submit = ui._submit_frame_for_inference
 
+    def submit_and_stop(mode, frame):
+        submitted.append((mode, frame))
+        original_submit(mode, frame)
+        ui._capture_stop.set()
+
+    monkeypatch.setattr(ui, "_submit_frame_for_inference", submit_and_stop)
+    ui._capture_worker("bean", cam_bean)
+
+    cam_bean.capture.assert_called_once()
+    assert [mode for mode, _frame in submitted] == ["bean"]
+    assert submitted[0][1] is raw_bean
+    assert ui._capture_sequences["bean"] == 1
+    # The capture slot and inference slot must never share mutable frame data.
+    assert not np.shares_memory(ui._infer_pending["bean"], raw_bean)
+
+
+def test_competition_renders_only_the_active_camera(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    snapshots = []
+
+    def snapshot(mode):
+        snapshots.append(mode)
+        return True, frame.copy(), 1
+
+    monkeypatch.setattr(ui, "_latest_capture_snapshot", snapshot)
     ui._running = True
     try:
-        ui._update_frame()
-        ui._update_frame()
-        with ui._capture_lock:
-            ui._capture_sequences["bean"] = 2
         ui._update_frame()
     finally:
         ui._running = False
 
-    # UI reads protected slots; it never invokes the cameras itself.
-    cam_bean.capture.assert_not_called()
-    cam_digit.capture.assert_not_called()
-    # Each camera is submitted once per capture sequence, not per UI poll.
-    assert [mode for mode, _frame in submitted] == ["bean", "digit", "bean"]
-    # Drawing happens on private snapshots, never the worker-owned raw frames.
-    assert np.array_equal(raw_bean, raw_bean_before)
-    assert np.array_equal(raw_digit, raw_digit_before)
-    assert not np.shares_memory(submitted[0][1], raw_bean)
-    assert not np.shares_memory(submitted[1][1], raw_digit)
+    assert snapshots == ["bean"]
 
 
 def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
@@ -364,6 +406,7 @@ def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
         MagicMock(),
         task_gen=task_gen,
     )
+    ui._task_update_interval = 0.0
     ui._latest_dets = {"bean": [], "digit": []}
 
     with caplog.at_level(logging.ERROR):
@@ -375,6 +418,52 @@ def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
         if "generate_frame failed" in record.message
     ]
     assert len(errors) == 1
+
+
+def test_competition_result_update_log_is_rate_limited(tmp_path, caplog, monkeypatch):
+    import logging
+
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        start_serial=False,
+    )
+    timestamps = iter((10.0, 10.5, 11.1))
+    monkeypatch.setattr("models.ui.time.monotonic", lambda: next(timestamps))
+
+    with caplog.at_level(logging.INFO):
+        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
+        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
+        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
+
+    updates = [
+        record for record in caplog.records if "Result updated" in record.message
+    ]
+    assert len(updates) == 2
+
+
+def test_competition_limits_task_updates_to_serial_interval(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    task_gen = MagicMock()
+    task_gen.generate_frame_with_completion.return_value = (None, {}, {}, "no frame")
+    ui = CompetitionUI(
+        str(cfg_path),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        task_gen=task_gen,
+        start_serial=False,
+    )
+    ui._latest_dets = {"bean": [], "digit": []}
+    timestamps = iter((10.0, 10.02, 10.06))
+    monkeypatch.setattr("models.ui.time.monotonic", lambda: next(timestamps))
+
+    ui._on_inference_done("bean", [])
+    ui._on_inference_done("digit", [])
+    ui._on_inference_done("bean", [])
+
+    assert task_gen.generate_frame_with_completion.call_count == 2
 
 
 def test_trackbar_limits_derived_from_camera_resolution(tmp_path):
@@ -723,6 +812,122 @@ def test_update_frame_does_not_block_on_slow_inference(tmp_path, monkeypatch):
     finally:
         ui._running = False
         ui._stop_inference_worker()
+
+
+def test_inference_workers_run_models_in_parallel(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    release_models = threading.Event()
+    bean_started = threading.Event()
+    digit_started = threading.Event()
+
+    def blocking_predict(started):
+        def predict(_frame):
+            started.set()
+            assert release_models.wait(timeout=2.0)
+            return []
+
+        return predict
+
+    bean_model = MagicMock()
+    bean_model.names = {0: "bean"}
+    bean_model.predict.side_effect = blocking_predict(bean_started)
+    digit_model = MagicMock()
+    digit_model.names = {0: "digit"}
+    digit_model.predict.side_effect = blocking_predict(digit_started)
+
+    ui = CalibrationUI(
+        str(cfg_path),
+        MagicMock(),
+        MagicMock(),
+        bean_model=bean_model,
+        digit_model=digit_model,
+    )
+    ui._running = True
+    ui._start_inference_worker()
+    try:
+        ui._submit_frame_for_inference("bean", frame)
+        ui._submit_frame_for_inference("digit", frame)
+
+        assert bean_started.wait(timeout=1.0)
+        assert digit_started.wait(timeout=1.0)
+    finally:
+        release_models.set()
+        ui._running = False
+        ui._stop_inference_worker()
+
+
+def test_stop_inference_worker_stops_all_model_workers(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CalibrationUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    )
+    ui._running = True
+    ui._start_inference_worker()
+
+    assert set(ui._infer_threads) == {"bean", "digit"}
+
+    ui._running = False
+    ui._stop_inference_worker()
+
+    assert ui._infer_threads == {}
+
+
+def test_competition_serializes_parallel_task_updates(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+
+    class BlockingTaskGenerator:
+        def __init__(self):
+            self.active = 0
+            self.max_active = 0
+            self.calls = 0
+            self.lock = threading.Lock()
+            self.first_call_started = threading.Event()
+            self.second_call_started = threading.Event()
+            self.release = threading.Event()
+
+        def generate_frame_with_completion(self, *_args, **_kwargs):
+            with self.lock:
+                self.calls += 1
+                self.active += 1
+                self.max_active = max(self.max_active, self.active)
+                if self.calls == 1:
+                    self.first_call_started.set()
+                else:
+                    self.second_call_started.set()
+            assert self.release.wait(timeout=2.0)
+            with self.lock:
+                self.active -= 1
+            return None, {}, {}, "no frame"
+
+    task_gen = BlockingTaskGenerator()
+    ui = CompetitionUI(
+        str(cfg_path),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        MagicMock(),
+        task_gen=task_gen,
+        start_serial=False,
+    )
+    ui._task_update_interval = 0.0
+    ui._latest_dets = {"bean": [], "digit": []}
+    first = threading.Thread(target=ui._on_inference_done, args=("bean", []))
+    second = threading.Thread(target=ui._on_inference_done, args=("digit", []))
+
+    first.start()
+    assert task_gen.first_call_started.wait(timeout=1.0)
+    second.start()
+    try:
+        assert not task_gen.second_call_started.wait(timeout=0.1)
+    finally:
+        task_gen.release.set()
+        first.join(timeout=1.0)
+        second.join(timeout=1.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert task_gen.max_active == 1
 
 
 def test_inference_overlay_can_be_disabled_via_config(tmp_path):
