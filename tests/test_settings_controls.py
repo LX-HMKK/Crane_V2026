@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import cv2
 
 from models.camera import Camera
+from models.config_binding import ConfigBinding
 from models.ui import CalibrationUI
 
 
@@ -54,6 +55,8 @@ def _settings_ui():
     return ui
 
 
+# ── Camera V4L2 setters (unchanged) ─────────────────────────────────
+
 def test_camera_runtime_setters_use_v4l2_values():
     camera = object.__new__(Camera)
     camera.cap = FakeCapture()
@@ -69,49 +72,106 @@ def test_camera_runtime_setters_use_v4l2_values():
     assert camera.cap.calls[-1] == (cv2.CAP_PROP_EXPOSURE, -5.5)
 
 
-def test_settings_update_runtime_and_persistable_config():
+# ── ConfigBinding read / write ──────────────────────────────────────
+
+def test_config_binding_read_write_roundtrip():
     ui = _settings_ui()
-
-    ui._set_camera_auto_exposure("bean", False)
-    ui._set_camera_exposure("bean", -4.5)
-    ui._set_camera_exposure("digit", -3.0)
-    ui._set_model_confidence("bean", 0.65)
-    ui._set_model_confidence("digit", 0.8)
-
-    assert ui.cfg["cameras"]["bean"] == {
-        "auto_exposure": False,
-        "exposure": -4.5,
-    }
-    assert ui.cam_bean.auto_exposure is False
-    assert ui.cam_bean.exposure == -4.5
-    assert ui.cfg["cameras"]["digit"]["exposure"] == -3.0
-    assert ui.cam_digit.exposure is None  # Auto exposure leaves the driver alone.
-    assert ui.cfg["models"]["bean"]["conf_thres"] == 0.65
-    assert ui.bean_model.conf_thres == 0.65
-    assert ui.cfg["models"]["digit"]["conf_thres"] == 0.8
-    assert ui.digit_model.conf_thres == 0.8
-
-
-def test_logic_limit_sliders_update_cfg():
-    """Setter writes max_inferred_beans / max_inferred_digits into cfg["logic"]."""
-    ui = _settings_ui()
-
-    ui._set_logic_limit("max_inferred_beans", 2)
-    ui._set_logic_limit("max_inferred_digits", 4)
-
+    binding = ConfigBinding(ui.cfg, "logic", "max_inferred_beans", default=1, type_=int)
+    assert binding.read() == 1
+    binding.write(2)
     assert ui.cfg["logic"]["max_inferred_beans"] == 2
-    assert ui.cfg["logic"]["max_inferred_digits"] == 4
     assert isinstance(ui.cfg["logic"]["max_inferred_beans"], int)
+
+
+def test_config_binding_coerces_string_to_type():
+    ui = _settings_ui()
+    binding = ConfigBinding(ui.cfg, "logic", "max_inferred_digits", default=2, type_=int)
+    binding.write("3")
+    assert ui.cfg["logic"]["max_inferred_digits"] == 3
     assert isinstance(ui.cfg["logic"]["max_inferred_digits"], int)
 
 
-def test_logic_limit_slider_string_to_int_conversion():
-    """Scale callbacks pass strings; ensure int coercion."""
+def test_config_binding_creates_intermediate_keys():
     ui = _settings_ui()
+    ui.cfg.pop("logic", None)
+    binding = ConfigBinding(ui.cfg, "logic", "new_key", default=5, type_=int)
+    assert binding.read() == 5  # default when path is missing
+    binding.write(7)
+    assert ui.cfg["logic"]["new_key"] == 7
 
-    ui._set_logic_limit("max_inferred_beans", "2")
-    ui._set_logic_limit("max_inferred_digits", "3")
 
-    assert ui.cfg["logic"]["max_inferred_beans"] == 2
-    assert ui.cfg["logic"]["max_inferred_digits"] == 3
-    assert isinstance(ui.cfg["logic"]["max_inferred_beans"], int)
+def test_config_binding_default_fallback():
+    cfg = {}
+    binding = ConfigBinding(cfg, "a", "b", "c", default=42, type_=int)
+    assert binding.read() == 42
+
+
+def test_config_binding_on_change_callback():
+    cfg = {}
+    side_effects = []
+    binding = ConfigBinding(cfg, "x", type_=int).on_change(lambda v: side_effects.append(v))
+    binding.write(10)
+    assert side_effects == [10]
+
+
+def test_config_binding_float_coercion():
+    cfg = {}
+    binding = ConfigBinding(cfg, "conf", default=0.5, type_=float)
+    binding.write("0.65")
+    assert cfg["conf"] == 0.65
+    assert isinstance(cfg["conf"], float)
+
+
+def test_config_binding_bool_coercion():
+    cfg = {}
+    binding = ConfigBinding(cfg, "flag", default=True, type_=bool)
+    binding.write(0)
+    assert cfg["flag"] is False
+    binding.write(1)
+    assert cfg["flag"] is True
+
+
+# ── Side-effect helpers (replacing old _set_* methods) ──────────────
+
+def test_apply_auto_exposure_pushes_to_camera():
+    ui = _settings_ui()
+    ui._apply_auto_exposure("bean", False)
+    assert ui.cam_bean.auto_exposure is False
+    ui._apply_auto_exposure("bean", True)
+    assert ui.cam_bean.auto_exposure is True
+
+
+def test_apply_exposure_skips_when_auto_is_on():
+    ui = _settings_ui()
+    ui._apply_exposure("digit", -3.0)
+    # auto_exposure still True → set_exposure must NOT be called
+    assert ui.cam_digit.exposure is None
+
+
+def test_apply_exposure_pushes_when_auto_is_off():
+    ui = _settings_ui()
+    ui.cfg["cameras"]["bean"]["auto_exposure"] = False
+    ui._apply_exposure("bean", -4.5)
+    assert ui.cam_bean.exposure == -4.5
+
+
+def test_apply_confidence_pushes_to_model():
+    ui = _settings_ui()
+    ui._apply_confidence("bean", 0.65)
+    assert ui.bean_model.conf_thres == 0.65
+    # rounding
+    ui._apply_confidence("digit", 0.876)
+    assert ui.digit_model.conf_thres == 0.88
+
+
+# ── Integration: ConfigBinding → cfg + side-effect ──────────────────
+
+def test_binding_with_on_change_writes_cfg_and_fires_side_effect():
+    ui = _settings_ui()
+    binding = ConfigBinding(
+        ui.cfg, "cameras", "bean", "auto_exposure", type_=bool,
+    ).on_change(lambda v: ui._apply_auto_exposure("bean", v))
+    binding.write(False)
+
+    assert ui.cfg["cameras"]["bean"]["auto_exposure"] is False
+    assert ui.cam_bean.auto_exposure is False

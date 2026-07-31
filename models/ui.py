@@ -1,4 +1,6 @@
 import logging
+import queue
+import sys
 import threading
 import time
 import tkinter as tk
@@ -8,6 +10,7 @@ import yaml
 from PIL import Image, ImageTk
 
 from models.camera_viewer import CameraViewer, LINE_COLORS
+from models.config_binding import ConfigBinding
 
 SLIDER_DEFS = {
     "bean": [
@@ -395,14 +398,15 @@ class CalibrationUI(CameraViewer):
             ).pack(side=tk.LEFT, padx=(0, 1))
 
             max_val = getattr(self, limit_attr)
-            var = tk.IntVar(master=self.root, value=self.cfg["lines"][group][key])
+            line_binding = ConfigBinding(self.cfg, "lines", group, key, type_=int)
+            var = tk.IntVar(master=self.root, value=line_binding.read())
             tk.Scale(
                 row,
                 from_=0,
                 to=max_val,
                 orient=tk.HORIZONTAL,
                 variable=var,
-                command=lambda value, g=group, k=key: self._set_line(g, k, int(value)),
+                command=lambda value, b=line_binding: b.write(value),
                 showvalue=False,
                 length=slider_length,
                 width=max(6, self.slider_width),
@@ -420,32 +424,35 @@ class CalibrationUI(CameraViewer):
         self._exposure_scales = {}
 
         for camera_name, title in (("bean", "BEAN CAMERA"), ("digit", "DIGIT CAMERA")):
-            camera_cfg = self.cfg["cameras"][camera_name]
             row = tk.Frame(self.sliders_frame)
             row.pack(fill=tk.X, pady=1)
 
             tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
                 side=tk.LEFT, padx=(0, 2)
             )
-            auto_var = tk.BooleanVar(
-                master=self.root,
-                value=bool(camera_cfg.get("auto_exposure", True)),
-            )
+
+            auto_binding = ConfigBinding(
+                self.cfg, "cameras", camera_name, "auto_exposure", type_=bool,
+            ).on_change(lambda v, n=camera_name: self._apply_auto_exposure(n, v))
+
+            auto_var = tk.BooleanVar(master=self.root, value=auto_binding.read())
             self._auto_exposure_vars[camera_name] = auto_var
             tk.Checkbutton(
                 row,
                 text="AUTO",
                 variable=auto_var,
-                command=lambda name=camera_name: self._set_camera_auto_exposure(
-                    name, self._auto_exposure_vars[name].get()
-                ),
+                command=lambda b=auto_binding, v=auto_var: b.write(v.get()),
                 font=font,
             ).pack(side=tk.LEFT, padx=(0, 8))
 
             tk.Label(row, text="EXPOSURE", font=font).pack(side=tk.LEFT, padx=(0, 2))
+
+            exp_binding = ConfigBinding(
+                self.cfg, "cameras", camera_name, "exposure", type_=float,
+            ).on_change(lambda v, n=camera_name: self._apply_exposure(n, v))
+
             exposure_var = tk.IntVar(
-                master=self.root,
-                value=int(camera_cfg.get("exposure", 1)),
+                master=self.root, value=int(exp_binding.read()),
             )
             scale = tk.Scale(
                 row,
@@ -455,9 +462,7 @@ class CalibrationUI(CameraViewer):
                 orient=tk.HORIZONTAL,
                 variable=exposure_var,
                 font=font,
-                command=lambda current, name=camera_name: self._set_camera_exposure(
-                    name, current
-                ),
+                command=lambda current, b=exp_binding: b.write(current),
                 showvalue=True,
                 length=max(180, self.window_width - 260),
                 width=max(6, self.slider_width),
@@ -475,8 +480,12 @@ class CalibrationUI(CameraViewer):
             tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
                 side=tk.LEFT, padx=(0, 2)
             )
-            value = float(self.cfg["models"][model_name].get("conf_thres", 0.7))
-            var = tk.DoubleVar(master=self.root, value=value)
+
+            conf_binding = ConfigBinding(
+                self.cfg, "models", model_name, "conf_thres", default=0.7, type_=float,
+            ).on_change(lambda v, n=model_name: self._apply_confidence(n, v))
+
+            var = tk.DoubleVar(master=self.root, value=conf_binding.read())
             tk.Scale(
                 row,
                 from_=0.05,
@@ -484,9 +493,7 @@ class CalibrationUI(CameraViewer):
                 resolution=0.05,
                 orient=tk.HORIZONTAL,
                 variable=var,
-                command=lambda current, name=model_name: self._set_model_confidence(
-                    name, current
-                ),
+                command=lambda current, b=conf_binding: b.write(current),
                 showvalue=True,
                 length=max(180, self.window_width - 180),
                 width=max(6, self.slider_width),
@@ -507,9 +514,11 @@ class CalibrationUI(CameraViewer):
             tk.Label(row, text=title, width=14, anchor=tk.W, font=font).pack(
                 side=tk.LEFT, padx=(0, 2)
             )
-            logic_cfg = self.cfg.get("logic", {})
-            value = int(logic_cfg.get(logic_key, 1))
-            var = tk.IntVar(master=self.root, value=value)
+
+            logic_binding = ConfigBinding(
+                self.cfg, "logic", logic_key, default=1, type_=int,
+            )
+            var = tk.IntVar(master=self.root, value=logic_binding.read())
             tk.Scale(
                 row,
                 from_=0,
@@ -517,7 +526,7 @@ class CalibrationUI(CameraViewer):
                 resolution=1,
                 orient=tk.HORIZONTAL,
                 variable=var,
-                command=lambda current, k=logic_key: self._set_logic_limit(k, current),
+                command=lambda current, b=logic_binding: b.write(current),
                 showvalue=True,
                 length=max(180, self.window_width - 180),
                 width=max(6, self.slider_width),
@@ -533,37 +542,27 @@ class CalibrationUI(CameraViewer):
     def _camera_for_name(self, camera_name):
         return self.cam_bean if camera_name == "bean" else self.cam_digit
 
-    def _set_camera_auto_exposure(self, camera_name, enabled):
-        enabled = bool(enabled)
-        self.cfg["cameras"][camera_name]["auto_exposure"] = enabled
+    # ── side-effect callbacks for ConfigBinding ──────────────────────
+
+    def _apply_auto_exposure(self, camera_name, value):
+        """Push auto-exposure to the live camera and refresh UI state."""
         setter = getattr(self._camera_for_name(camera_name), "set_auto_exposure", None)
         if setter is not None:
-            setter(enabled)
+            setter(value)
         self._refresh_exposure_control_states()
 
-    def _set_camera_exposure(self, camera_name, value):
-        try:
-            value = float(value)
-        except (TypeError, ValueError):
-            logging.warning("Invalid %s camera exposure value: %r", camera_name, value)
-            return
-
-        self.cfg["cameras"][camera_name]["exposure"] = value
+    def _apply_exposure(self, camera_name, value):
+        """Push exposure value to the live camera when auto is off."""
         if not self.cfg["cameras"][camera_name].get("auto_exposure", True):
             setter = getattr(self._camera_for_name(camera_name), "set_exposure", None)
             if setter is not None:
                 setter(value)
 
-    def _set_model_confidence(self, model_name, value):
-        value = round(float(value), 2)
-        self.cfg["models"][model_name]["conf_thres"] = value
+    def _apply_confidence(self, model_name, value):
+        """Push confidence threshold to the live model object."""
         model = self.bean_model if model_name == "bean" else self.digit_model
         if model is not None:
-            model.conf_thres = value
-
-    def _set_logic_limit(self, key, value):
-        """Update logic completion threshold in config."""
-        self.cfg.setdefault("logic", {})[key] = int(value)
+            model.conf_thres = round(float(value), 2)
 
     def _refresh_exposure_control_states(self):
         for camera_name, scale in self._exposure_scales.items():
@@ -611,9 +610,6 @@ class CalibrationUI(CameraViewer):
             self._digit_button.config(bg="#555555", relief=tk.RAISED)
             self._settings_button.config(bg="#0066cc", relief=tk.SUNKEN)
 
-    def _set_line(self, group, key, value):
-        # Update in-memory config only — write to disk happens on explicit SAVE.
-        self.cfg["lines"][group][key] = int(value)
 
     @staticmethod
     def _class_name(names, cls_id):
@@ -806,6 +802,10 @@ class CompetitionUI(CalibrationUI):
         self._capture_sequences = {"bean": 0, "digit": 0}
         if self.serial is not None and start_serial:
             self.serial.start()
+        # ESC and window close: hard exit so the watchdog restarts.
+        # Only the EXIT button stops the watchdog (clean exit 0).
+        self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(1))
+        self.root.bind("<Escape>", lambda _event: sys.exit(1))
 
     # ── dual-camera capture ────────────────────────────────────────────
 

@@ -14,6 +14,7 @@ import yaml
 from unittest.mock import MagicMock
 
 from models.camera import MockCamera
+from models.config_binding import ConfigBinding
 from models.ui import CalibrationUI, CompetitionUI, _InferenceRateMeter
 from calibrate import run_calibration
 
@@ -99,9 +100,9 @@ def test_ui_saves_lines_on_explicit_save(tmp_path):
     cam_bean = MagicMock()
     cam_digit = MagicMock()
     ui = CalibrationUI(str(cfg_path), cam_bean, cam_digit)
-    ui._set_line("bean", "left_x", 150)
-    ui._set_line("digit", "x1", 250)
-    # _set_line only updates memory; disk write happens on explicit _save_cfg.
+    ConfigBinding(ui.cfg, "lines", "bean", "left_x", type_=int).write(150)
+    ConfigBinding(ui.cfg, "lines", "digit", "x1", type_=int).write(250)
+    # ConfigBinding only updates memory; disk write happens on explicit _save_cfg.
     ui._save_cfg()
 
     with open(cfg_path, "r") as f:
@@ -113,8 +114,8 @@ def test_ui_saves_lines_on_explicit_save(tmp_path):
 def test_set_line_updates_memory_only(tmp_path):
     cfg_path = _write_cfg(tmp_path)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
-    ui._set_line("bean", "left_x", 150)
-    # File must NOT be written by _set_line alone — save is manual (SAVE button).
+    ConfigBinding(ui.cfg, "lines", "bean", "left_x", type_=int).write(150)
+    # File must NOT be written by ConfigBinding alone — save is manual (SAVE button).
     text_before = cfg_path.read_text(encoding="utf-8")
     assert "left_x: 150" not in text_before
     # Memory is updated though.
