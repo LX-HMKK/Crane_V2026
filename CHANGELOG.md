@@ -2,10 +2,11 @@
 
 本文件记录项目的所有重要变更，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)。
 
-## [Unreleased] - 2026-07-30
+## [Unreleased] - 2026-08-03
 
 ### 新增
 
+- 相机/串口掉线自动重连：设备连续失败达到配置次数后自动重开，UI 状态栏显示 BEAN/DIGIT/SERIAL 离线状态，离线相机以占位画面提示。
 - RDK X5 early-start `crane-vision.service`、安装脚本和服务运维文档；结果通路先启动，X11 就绪后接管同一 UI。
 - 推理吞吐日志与验收命令，可分别观察 bean、digit 和总完成帧率。
 
@@ -27,6 +28,8 @@
 
 ### 变更
 
+- 提取 ConfigBinding 类，用类型化绑定替换字典操作 setter。
+- 豆子/数字检测权重更新至 v6（beans_v6 / num_v6）。
 - 竞赛模式改为两路独立相机采集线程和两路独立模型推理线程；每路仅保留最新帧，UI 刷新不再限制推理输入。
 - 任务组合按串口发送周期限速，结果日志按窗口限速，降低重复计算和日志 I/O 对实时路径的影响。
 - RDK 运行时改用 headless OpenCV，减少冷启动期间不需要的 GUI 原生库加载。
