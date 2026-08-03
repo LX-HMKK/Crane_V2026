@@ -27,9 +27,9 @@ python3 scripts/main_arm64.py --mock-cameras
 
 见 `configs/vision.yaml`，主要包含：
 
-- `serial`：串口设备、波特率、读超时。
+- `serial`：串口设备、波特率、读超时、掉线重连（`serial.reconnect`）。
 - `protocol`：START 命令超时（默认 300 ms）、结果帧发送间隔（默认 0.1 s，对应 10 Hz）、轮询间隔、扫描重试间隔。
-- `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小。
+- `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小、掉线重连（`cameras.<name>.reconnect`）。
 - `models.bean` / `models.digit`：`.bin` 模型路径与对应 `_rdkx5_config.yaml`。
 - `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`。
 - `scan`：连续扫描帧数、最大重试次数、总超时。
@@ -49,6 +49,16 @@ INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
 5. **SILENT**：若连续 300 ms 未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
 
 > **赛前准备阶段视觉保持串口静默**，只有收到 START 命令后才开始识别并回传结果帧。
+
+## 掉线重连与状态显示
+
+相机与串口均内置自动重连，无需重启进程：
+
+- **相机重连**：`Camera.capture()` 连续失败 `cameras.<name>.reconnect.after_failures`（默认 3）次后，自动 release 并重建 `cv2.VideoCapture`，按 `interval_sec`（默认 1 s）限速重试；设备恢复后自动续采。失败期间所有调用方照常拿到 `(False, None)`。
+- **串口重连**：`SerialThread` 连续失败 `serial.reconnect.after_failures`（默认 5）次后 close 并用原参数 reopen，按 `interval_sec` 限速重试。
+- **掉线期间串口 sticky**：相机掉线时**继续发送最后一个有效结果帧，不清空**。只有"相机健康但连续 10 次排不出有效结果"（例如画面里根本没有目标）才清空串口缓存。
+- **旧检测失效**：相机确认掉线后，其最后一次检测会被失效，不再与另一台相机的新检测合并成含死相机旧数据的帧；重连后首帧新推理自动续发。
+- **UI 状态显示**：`CompetitionUI` 底部状态栏显示 `BEAN` / `DIGIT` / `SERIAL` / `START` 状态（绿=OK，红=OFFLINE，灰=N/A 或 START 无心跳）。正在查看的相机确认掉线后显示黑屏占位「CAMERA OFFLINE」，**不再回退显示另一台相机**；校准/查看器同样显示占位。启动初期未出帧显示灰色「WAITING FOR CAMERA...」而非报警红。
 
 ## 分区映射与辅助线规则
 

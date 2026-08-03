@@ -2,6 +2,7 @@ import logging
 import tkinter as tk
 
 import cv2
+import numpy as np
 import yaml
 from PIL import Image, ImageTk
 
@@ -217,6 +218,43 @@ class CameraViewer:
             x = self.cfg["lines"]["digit"][key]
             cv2.line(frame, (x, 0), (x, h), LINE_COLORS[f"digit_{key}"], 2)
 
+    def _show_frame(self, frame):
+        """Convert a BGR frame to RGB and render it on the video label."""
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        pil_image = Image.fromarray(rgb)
+        imgtk = ImageTk.PhotoImage(image=pil_image)
+        self.video_label.imgtk = imgtk
+        self.video_label.config(image=imgtk)
+
+    def _render_placeholder(self, text, width=None, height=None, color=(0, 0, 255)):
+        """Render a black frame with centered text (default red = offline).
+
+        The result is cached per (text, size, color) so the offline loops do not
+        re-zero and re-rasterize the same static bitmap on every 30ms tick.
+        """
+        if width is None:
+            width = self.window_width
+        if height is None:
+            height = self.video_max_height
+        key = (text, int(width), int(height), color)
+        cache = getattr(self, "_placeholder_cache", None)
+        if cache is None:
+            cache = self._placeholder_cache = {}
+        cached = cache.get(key)
+        if cached is not None:
+            return cached
+
+        placeholder = np.zeros((height, width, 3), dtype=np.uint8)
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.8
+        thickness = 2
+        text_size = cv2.getTextSize(text, font, scale, thickness)[0]
+        text_x = max(1, (width - text_size[0]) // 2)
+        text_y = max(1, (height + text_size[1]) // 2)
+        cv2.putText(placeholder, text, (text_x, text_y), font, scale, color, thickness)
+        cache[key] = placeholder
+        return placeholder
+
     def _update_frame(self):
         if not self._running:
             return
@@ -226,29 +264,30 @@ class CameraViewer:
         else:
             ok, frame = self.cam_digit.capture()
 
+        try:
+            avail_w = int(self._video_container.winfo_width())
+            avail_h = int(self._video_container.winfo_height())
+        except Exception:
+            avail_w, avail_h = 0, 0
+        if avail_w <= 1 or avail_h <= 1:
+            avail_w, avail_h = self.window_width, self.video_max_height
+
         if ok and frame is not None:
             if self.mode == "bean":
                 self._draw_bean_lines(frame)
             else:
                 self._draw_digit_lines(frame)
 
-            try:
-                avail_w = int(self._video_container.winfo_width())
-                avail_h = int(self._video_container.winfo_height())
-            except Exception:
-                avail_w, avail_h = 0, 0
-            if avail_w <= 1 or avail_h <= 1:
-                avail_w, avail_h = self.window_width, self.video_max_height
-
             display_frame = self._resize_for_display(
                 frame, max_w=avail_w, max_h=avail_h
             )
-
-            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb)
-            imgtk = ImageTk.PhotoImage(image=pil_image)
-            self.video_label.imgtk = imgtk
-            self.video_label.config(image=imgtk)
+            self._show_frame(display_frame)
+        else:
+            self._show_frame(
+                self._render_placeholder(
+                    f"CAMERA OFFLINE: {self.mode.upper()}", avail_w, avail_h
+                )
+            )
 
         if self._running:
             self.root.after(30, self._update_frame)

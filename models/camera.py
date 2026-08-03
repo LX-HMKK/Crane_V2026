@@ -2,6 +2,7 @@ import logging
 import shutil
 import subprocess
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -20,39 +21,72 @@ class Camera:
         auto_exposure=True,
         exposure=None,
         grayscale=False,
+        reconnect_enabled=True,
+        reconnect_after=3,
+        reconnect_interval=1.0,
     ):
         self.device_index = device_index
         self._io_lock = threading.RLock()
-        self.cap = cv2.VideoCapture(device_index)
-        if not self.cap.isOpened():
-            raise RuntimeError(f"Cannot open camera device {device_index}")
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        if fps:
-            self.cap.set(cv2.CAP_PROP_FPS, fps)
-        # Some UVC drivers ignore CAP_PROP_FPS and report a different active
-        # rate. Keep the configured rate so the latest-frame worker can avoid
-        # decoding more frames than the application requested.
+
+        # Rebuild parameters, replayed by _configure_cap() on every (re)open.
+        self._req_width = int(width)
+        self._req_height = int(height)
+        self._auto_exposure_requested = bool(auto_exposure)
+        self._exposure_requested = float(exposure) if exposure is not None else None
+        self.buffer_size = int(buffer_size)
         self.target_fps = float(fps) if fps else None
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, buffer_size)
-        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
         self.grayscale = bool(grayscale)
+
+        # Reconnect tuning: rate-limited auto reopen after sustained failures.
+        self.reconnect_enabled = bool(reconnect_enabled)
+        self.reconnect_after = max(1, int(reconnect_after))
+        self.reconnect_interval = max(0.05, float(reconnect_interval))
 
         self.auto_exposure = None
         self.exposure = None
-        self.set_auto_exposure(auto_exposure)
-        if exposure is not None:
-            self.exposure = float(exposure)
-            if not auto_exposure:
-                self.set_exposure(exposure)
+        self._consecutive_failures = 0
+        self._last_reopen_at = 0.0
+        self.cap = None
+
+        self.cap = cv2.VideoCapture(device_index)
+        if not self.cap.isOpened():
+            raise RuntimeError(f"Cannot open camera device {device_index}")
+        self._configure_cap()
+
+    def _configure_cap(self):
+        """(Re)apply the requested camera parameters to the current handle."""
+        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._req_width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._req_height)
+        if self.target_fps:
+            self.cap.set(cv2.CAP_PROP_FPS, self.target_fps)
+        # Some UVC drivers ignore CAP_PROP_FPS and report a different active
+        # rate. Keep the configured rate so the latest-frame worker can avoid
+        # decoding more frames than the application requested.
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, self.buffer_size)
+        self.width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        self.height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
+        self.set_auto_exposure(self._auto_exposure_requested)
+        if self._exposure_requested is not None:
+            self.exposure = self._exposure_requested
+            if not self._auto_exposure_requested:
+                self.set_exposure(self._exposure_requested)
 
     def set_auto_exposure(self, enabled):
         """Set V4L2 auto exposure and return whether the driver accepted it."""
         with self._io_lock:
             enabled = bool(enabled)
+            # Remember the intended mode so a reconnect re-applies it even if
+            # the operator changed it at runtime (settings UI).
+            self._auto_exposure_requested = enabled
+            if self.cap is None:
+                logging.warning(
+                    "Cannot set auto_exposure=%s, camera %s not open",
+                    enabled,
+                    self.device_index,
+                )
+                return False
             # These RDK USB cameras expose V4L2 menu values 1=manual, 3=auto.
             # Use v4l2-ctl when available because OpenCV's 0.25/0.75 mapping is
             # not applied consistently by their UVC driver.
@@ -77,6 +111,16 @@ class Camera:
         """Set the manual exposure value and return whether it was accepted."""
         with self._io_lock:
             value = float(value)
+            # Remember the intended value so a reconnect re-applies it even if
+            # the operator changed it at runtime (settings UI).
+            self._exposure_requested = value
+            if self.cap is None:
+                logging.warning(
+                    "Cannot set exposure=%s, camera %s not open",
+                    value,
+                    self.device_index,
+                )
+                return False
             if self._set_v4l2_control("exposure_time_absolute", int(round(value))):
                 self.exposure = value
                 return True
@@ -128,7 +172,22 @@ class Camera:
         # The UI capture worker and settings controls share this object.
         # Keep VideoCapture operations serialized on the underlying device.
         with self._io_lock:
-            ok, frame = self.cap.read()
+            if self.cap is None:
+                self._consecutive_failures += 1
+                self._maybe_reopen()
+                ok, frame = False, None
+            else:
+                try:
+                    ok, frame = self.cap.read()
+                except Exception:
+                    # A driver/device exception is a capture failure too; treat
+                    # it like a failed read so auto-reconnect kicks in.
+                    ok, frame = False, None
+                if ok and frame is not None:
+                    self._consecutive_failures = 0
+                else:
+                    self._consecutive_failures += 1
+                    self._maybe_reopen()
         if not ok or frame is None:
             return ok, frame
 
@@ -146,8 +205,57 @@ class Camera:
 
         return ok, frame
 
+    def _maybe_reopen(self):
+        """Reopen the camera after sustained failures, rate-limited."""
+        if not self.reconnect_enabled:
+            return
+        if self._consecutive_failures < self.reconnect_after:
+            return
+        if (time.monotonic() - self._last_reopen_at) < self.reconnect_interval:
+            return
+        self._last_reopen_at = time.monotonic()
+        self._reopen()
+
+    def _reopen(self):
+        """Recreate the VideoCapture handle after the device went away."""
+        cap = self.cap
+        self.cap = None
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                logging.exception(
+                    "Failed to release camera %s before reopen", self.device_index
+                )
+
+        try:
+            new_cap = cv2.VideoCapture(self.device_index)
+            if not new_cap.isOpened():
+                new_cap.release()
+                logging.warning("Camera %s reopen failed", self.device_index)
+                return False
+            self.cap = new_cap
+            self._configure_cap()
+            self._consecutive_failures = 0
+            logging.info("Camera %s reconnected", self.device_index)
+            return True
+        except Exception:
+            # A failure while configuring the new handle must never escape
+            # capture(); leave the camera disconnected and let the next
+            # interval retry the reopen.
+            logging.warning("Camera %s reopen failed", self.device_index, exc_info=True)
+            if self.cap is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+            return False
+
     def release(self):
         with self._io_lock:
+            if self.cap is None:
+                return
             self.cap.release()
 
 

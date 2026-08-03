@@ -71,12 +71,16 @@ def _wait_for_competition_devices(cfg, poll_interval=0.2):
 
 def _create_serial_thread(cfg):
     proto = cfg.get("protocol", {})
+    reconnect_cfg = cfg.get("serial", {}).get("reconnect", {}) or {}
     return SerialThread(
         cfg["serial"]["port"],
         cfg["serial"]["baudrate"],
         timeout=cfg["serial"].get("timeout", 0.05),
         start_timeout=proto.get("start_timeout_sec", 0.3),
         send_interval=proto.get("send_interval_sec", 0.1),
+        reconnect_enabled=reconnect_cfg.get("enabled", True),
+        reconnect_after=reconnect_cfg.get("after_failures", 5),
+        reconnect_interval=reconnect_cfg.get("interval_sec", 1.0),
     )
 
 
@@ -141,6 +145,14 @@ class HeadlessCompetitionLoop:
             self._capture_failure_count = 0
             self._last_capture_failure_log_at = None
 
+        if capture_failed:
+            # Camera outage: keep the last valid frame sticky (never clear it)
+            # and let the caller back off. Outages are not logic failures, so
+            # they must not count toward the clear-on-10 threshold — otherwise
+            # a recovery that still has no valid arrangement could never clear
+            # the stale frame again.
+            return True
+
         if capture_reason == "ok":
             frame, reason = build_completed_result(
                 self.task_gen, bean_dets, digit_dets, self.cfg
@@ -168,17 +180,16 @@ class HeadlessCompetitionLoop:
         self.consecutive_failures += 1
         if self.consecutive_failures == 10:
             self.serial.current_frame = None
-            if not capture_failed:
-                logging.error(
-                    "No valid result after %d scans; clearing serial frame: %s",
-                    self.consecutive_failures, reason,
-                )
-        elif self.consecutive_failures < 10 and not capture_failed:
+            logging.error(
+                "No valid result after %d scans; clearing serial frame: %s",
+                self.consecutive_failures, reason,
+            )
+        elif self.consecutive_failures < 10:
             logging.warning(
                 "Result generation failed (%d/10): %s",
                 self.consecutive_failures, reason,
             )
-        return capture_failed
+        return False
 
     def _on_capture_failure(self, bean_ok, digit_ok):
         self._capture_failed_this_scan = True

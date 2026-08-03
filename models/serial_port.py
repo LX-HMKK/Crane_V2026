@@ -137,10 +137,20 @@ class SerialThread:
     """
 
     def __init__(self, device, baudrate, timeout=0.05,
-                 start_timeout=0.3, send_interval=0.1):
+                 start_timeout=0.3, send_interval=0.1,
+                 reconnect_enabled=True, reconnect_after=5,
+                 reconnect_interval=1.0):
+        self._device = device
+        self._baudrate = baudrate
+        self._timeout = timeout
         self._port = open_serial_port(device, baudrate, timeout=timeout)
         self._start_timeout = start_timeout
         self._send_interval = send_interval
+        self._reconnect_enabled = reconnect_enabled
+        self._reconnect_after = max(reconnect_after, 1)
+        self._reconnect_interval = max(reconnect_interval, 0.05)
+        self._consecutive_failures = 0
+        self._last_reopen_at = 0.0
         self._current_frame = None
         self._lock = threading.Lock()
         self._running = False
@@ -161,7 +171,14 @@ class SerialThread:
             self._current_frame = frame
 
     @property
+    def connected(self):
+        """True while a serial port handle is held (even mid-reconnect)."""
+        return self._port is not None
+
+    @property
     def is_start_active(self):
+        if self._port is None:
+            return False
         return self._port.is_start_active(self._start_timeout)
 
     # ── lifecycle ─────────────────────────────────────────────────────
@@ -179,7 +196,8 @@ class SerialThread:
         self._running = False
         if self._thread is not None:
             self._thread.join(timeout=2.0)
-        self._port.close()
+        if self._port is not None:
+            self._port.close()
 
     # ── internal ───────────────────────────────────────────────────────
 
@@ -187,6 +205,11 @@ class SerialThread:
         last_send = 0.0
         while self._running:
             try:
+                if self._port is None:
+                    # Previous reopen failed; retry on the reconnect interval.
+                    self._maybe_reopen()
+                    time.sleep(0.1)
+                    continue
                 self._port.poll_start()
                 if self._port.is_start_active(self._start_timeout):
                     frame = self.current_frame
@@ -207,7 +230,39 @@ class SerialThread:
                 else:
                     self._reported_missing_frame = False
                     self._reported_transmission = False
+                self._consecutive_failures = 0
             except Exception:
+                self._consecutive_failures += 1
+                self._maybe_reopen()
                 logging.exception("SerialThread send failed")
                 time.sleep(1.0)  # backoff on persistent fault
             time.sleep(0.005)  # 200 Hz poll rate
+
+    def _maybe_reopen(self):
+        """Attempt a reopen after persistent failures, rate-limited."""
+        if not self._reconnect_enabled:
+            return
+        if self._consecutive_failures < self._reconnect_after:
+            return
+        if time.monotonic() - self._last_reopen_at < self._reconnect_interval:
+            return
+        self._last_reopen_at = time.monotonic()
+        self._reopen()
+
+    def _reopen(self):
+        """Close the dead port and open a fresh handle on the same device."""
+        if self._port is not None:
+            try:
+                self._port.close()
+            except Exception:
+                logging.warning("Failed to close serial port before reopen")
+        self._port = None
+        try:
+            self._port = open_serial_port(
+                self._device, self._baudrate, timeout=self._timeout
+            )
+            logging.info("Serial port %s reconnected", self._device)
+            self._consecutive_failures = 0
+        except Exception:
+            logging.warning("Serial port %s reconnect failed", self._device)
+            self._port = None

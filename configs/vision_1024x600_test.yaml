@@ -39,6 +39,11 @@ cameras:
     buffer_size: 1
     auto_exposure: true
     grayscale: false
+    # 掉线重连：连续失败后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
   digit:         # 数字相机：识别放置区 ④~⑧ 的数字
     device: 2
     width: 1280
@@ -46,6 +51,11 @@ cameras:
     buffer_size: 1
     auto_exposure: true
     grayscale: true
+    # 掉线重连：连续失败后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
 
 # -----------------------------------------------------------------------------
 # 模型路径与阈值

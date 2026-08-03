@@ -2,6 +2,11 @@ serial:
   port: /dev/ttyS1
   baudrate: 921600
   timeout: 0.05
+  # 掉线重连：连续失败 after_failures 次后自动重开串口
+  reconnect:
+    enabled: true
+    after_failures: 5
+    interval_sec: 1.0
 protocol:
   start_timeout_sec: 0.3
   send_interval_sec: 0.05
@@ -15,6 +20,11 @@ cameras:
     auto_exposure: true
     exposure: 10000
     grayscale: false
+    # 掉线重连：连续失败 after_failures 次后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
   digit:
     device: /dev/crane_cam_digit
     width: 1280
@@ -24,6 +34,11 @@ cameras:
     auto_exposure: true
     exposure: 166
     grayscale: true
+    # 掉线重连：连续失败 after_failures 次后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
 models:
   bean:
     bin: assets/beans_v6.bin

@@ -43,7 +43,15 @@ RESULT_FAILURE_LOG_INTERVAL_SEC = 5.0
 RESULT_UPDATE_LOG_INTERVAL_SEC = 1.0
 DEFAULT_TASK_UPDATE_INTERVAL_SEC = 0.05
 CAPTURE_FAILURE_BACKOFF_SEC = 0.05
+CAPTURE_OFFLINE_AFTER_FAILURES = 5
 INFERENCE_RATE_LOG_INTERVAL_SEC = 5.0
+
+STATUS_TITLES = {
+    "bean": "BEAN",
+    "digit": "DIGIT",
+    "serial": "SERIAL",
+    "start": "START",
+}
 
 
 class _InferenceRateMeter:
@@ -225,6 +233,15 @@ class CalibrationUI(CameraViewer):
             self._infer_pending[mode] = None
             return frame
 
+    def _camera_capture_healthy(self, mode):
+        """Whether this camera is currently producing live frames.
+
+        The calibration UI captures synchronously on the Tk thread, so any
+        inference it schedules already ran on a live frame. CompetitionUI
+        overrides this with a capture-failure check.
+        """
+        return True
+
     def _inference_worker(self, mode):
         """Run inference on the latest pending frame for one camera/model."""
         model = self.bean_model if mode == "bean" else self.digit_model
@@ -239,6 +256,11 @@ class CalibrationUI(CameraViewer):
                 # Do not publish a result or update serial output after UI shutdown.
                 if not self._running:
                     break
+                if not self._camera_capture_healthy(mode):
+                    # The camera is confirmed offline. Drop this inference so
+                    # stale detections from the last pre-disconnect frame can
+                    # never be re-published into a fresh result frame.
+                    continue
                 with self._result_lock:
                     self._latest_dets[mode] = dets
                     self._latest_names[mode] = model.names
@@ -668,6 +690,16 @@ class CalibrationUI(CameraViewer):
         if not self._running:
             return
 
+        # All calibration logic runs on the native-resolution frame;
+        # only the displayed copy is scaled to fit the available container.
+        try:
+            avail_w = int(self._video_container.winfo_width())
+            avail_h = int(self._video_container.winfo_height())
+        except Exception:
+            avail_w, avail_h = 0, 0
+        if avail_w <= 1 or avail_h <= 1:
+            avail_w, avail_h = self.window_width, self.video_max_height
+
         if self.mode == "bean":
             ok, frame = self.cam_bean.capture()
             model = self.bean_model
@@ -675,7 +707,16 @@ class CalibrationUI(CameraViewer):
             ok, frame = self.cam_digit.capture()
             model = self.digit_model
 
-        if ok and frame is not None:
+        if not ok or frame is None:
+            # Calibration runs on the Tk main thread, so capture health is
+            # checked synchronously here; show a placeholder instead of
+            # leaving the last frame frozen on screen.
+            self._show_frame(
+                self._render_placeholder(
+                    f"CAMERA OFFLINE: {self.mode.upper()}", avail_w, avail_h
+                )
+            )
+        else:
             if self.mode == "bean":
                 self._draw_bean_lines(frame)
             else:
@@ -691,25 +732,10 @@ class CalibrationUI(CameraViewer):
                 if latest_dets is not None:
                     self._draw_detections(frame, latest_dets, latest_names)
 
-            # All calibration logic runs on the native-resolution frame;
-            # only the displayed copy is scaled to fit the available container.
-            try:
-                avail_w = int(self._video_container.winfo_width())
-                avail_h = int(self._video_container.winfo_height())
-            except Exception:
-                avail_w, avail_h = 0, 0
-            if avail_w <= 1 or avail_h <= 1:
-                avail_w, avail_h = self.window_width, self.video_max_height
-
             display_frame = self._resize_for_display(
                 frame, max_w=avail_w, max_h=avail_h
             )
-
-            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-            pil_image = Image.fromarray(rgb)
-            imgtk = ImageTk.PhotoImage(image=pil_image)
-            self.video_label.imgtk = imgtk
-            self.video_label.config(image=imgtk)
+            self._show_frame(display_frame)
 
         if self._running:
             self.root.after(30, self._update_frame)
@@ -800,8 +826,10 @@ class CompetitionUI(CalibrationUI):
         self._capture_ready = {"bean": False, "digit": False}
         self._capture_failure_logged = {"bean": False, "digit": False}
         self._capture_sequences = {"bean": 0, "digit": 0}
+        self._capture_failures = {"bean": 0, "digit": 0}
         if self.serial is not None and start_serial:
             self.serial.start()
+        self._build_status_bar()
         # ESC and window close: hard exit so the watchdog restarts.
         # Only the EXIT button stops the watchdog (clean exit 0).
         self.root.protocol("WM_DELETE_WINDOW", lambda: sys.exit(1))
@@ -854,6 +882,13 @@ class CompetitionUI(CalibrationUI):
                     self._capture_ready[mode] = False
                     log_failure = not self._capture_failure_logged[mode]
                     self._capture_failure_logged[mode] = True
+                    self._capture_failures[mode] += 1
+                    invalidate = (
+                        self._capture_failures[mode]
+                        >= CAPTURE_OFFLINE_AFTER_FAILURES
+                    )
+                if invalidate:
+                    self._invalidate_camera_detections(mode)
                 if log_failure:
                     logging.warning("Camera capture failed (%s): %s", mode, exc)
                 self._capture_stop.wait(CAPTURE_FAILURE_BACKOFF_SEC)
@@ -865,6 +900,13 @@ class CompetitionUI(CalibrationUI):
                     self._capture_ready[mode] = False
                     log_failure = not self._capture_failure_logged[mode]
                     self._capture_failure_logged[mode] = True
+                    self._capture_failures[mode] += 1
+                    invalidate = (
+                        self._capture_failures[mode]
+                        >= CAPTURE_OFFLINE_AFTER_FAILURES
+                    )
+                if invalidate:
+                    self._invalidate_camera_detections(mode)
                 if log_failure:
                     logging.warning("Camera capture returned no frame (%s)", mode)
                 self._capture_stop.wait(CAPTURE_FAILURE_BACKOFF_SEC)
@@ -875,12 +917,30 @@ class CompetitionUI(CalibrationUI):
                 self._captured_frames[mode] = frame
                 self._capture_ready[mode] = True
                 self._capture_failure_logged[mode] = False
+                self._capture_failures[mode] = 0
                 self._capture_sequences[mode] += 1
             # Feed inference from the camera thread rather than the Tk event
             # loop. Rendering can run slower than capture without reducing
             # the rate at which each model receives its newest frame.
             self._submit_frame_for_inference(mode, frame)
             next_capture_at += interval
+
+    def _invalidate_camera_detections(self, mode):
+        """Clear one camera's stale detections once it is confirmed offline."""
+        with self._result_lock:
+            if self._latest_dets[mode] is None and self._latest_names[mode] is None:
+                return
+            self._latest_dets[mode] = None
+            self._latest_names[mode] = None
+            logging.warning(
+                "Camera %s offline; invalidating its last detections", mode
+            )
+
+    def _camera_capture_healthy(self, mode):
+        """False once a camera is confirmed offline, so its stale detections
+        are neither re-published nor merged into a new result frame."""
+        with self._capture_lock:
+            return self._capture_failures.get(mode, 0) < CAPTURE_OFFLINE_AFTER_FAILURES
 
     def _latest_capture_snapshot(self, mode):
         """Return a private copy of a camera's latest frame and sequence."""
@@ -889,6 +949,20 @@ class CompetitionUI(CalibrationUI):
             if not self._capture_ready[mode] or frame is None:
                 return False, None, self._capture_sequences[mode]
             return True, frame.copy(), self._capture_sequences[mode]
+
+    def _camera_state(self, mode):
+        """Return (state, frame) for one camera: ok / grace / waiting / offline."""
+        with self._capture_lock:
+            ready = self._capture_ready.get(mode, False)
+            failures = self._capture_failures.get(mode, 0)
+            frame = self._captured_frames.get(mode)
+        if failures >= CAPTURE_OFFLINE_AFTER_FAILURES:
+            return ("offline", None)
+        if ready and frame is not None:
+            return ("ok", frame)
+        if frame is not None:
+            return ("grace", frame)
+        return ("waiting", None)
 
     @staticmethod
     def _inferred_label(mode, zone, value):
@@ -957,8 +1031,76 @@ class CompetitionUI(CalibrationUI):
                 0.55, (0, 140, 255), 2,
             )
 
+    def _build_status_bar(self):
+        """Add a status bar under the control panel for camera/serial state."""
+        status_frame = tk.Frame(self._control_frame)
+        status_frame.pack(side=tk.BOTTOM, fill=tk.X)
+
+        font = ("Helvetica", int(12 * self.font_scale))
+        self._status_labels = {}
+        self._status_states = {}
+        for key, title in STATUS_TITLES.items():
+            label = tk.Label(
+                status_frame,
+                text=f"{title}: N/A",
+                font=font,
+                fg="white",
+                bg="#555555",
+            )
+            label.pack(side=tk.LEFT, padx=2)
+            self._status_labels[key] = label
+            self._status_states[key] = None
+
+    def _set_status(self, key, ok):
+        """Update one status label; ok True/False/None (None means N/A)."""
+        if self._status_states.get(key) == ok:
+            return
+        title = STATUS_TITLES.get(key, key)
+        if key == "start":
+            # START reflects the lower machine's command, not a fault: an
+            # absent heartbeat is idle (grey OFF), never an alarm-red OFFLINE.
+            if ok is None:
+                text, bg = f"{title}: N/A", "#666666"
+            elif ok:
+                text, bg = f"{title}: ON", "#006600"
+            else:
+                text, bg = f"{title}: OFF", "#555555"
+        elif ok is None:
+            text, bg = f"{title}: N/A", "#666666"
+        elif ok:
+            text, bg = f"{title}: OK", "#006600"
+        else:
+            text, bg = f"{title}: OFFLINE", "#aa0000"
+        self._status_labels[key].config(text=text, bg=bg)
+        self._status_states[key] = ok
+
+    def _update_status(self):
+        """Refresh the status bar; errors must never break the frame loop."""
+        try:
+            for mode in ("bean", "digit"):
+                offline = (
+                    self._capture_failures.get(mode, 0)
+                    >= CAPTURE_OFFLINE_AFTER_FAILURES
+                )
+                self._set_status(mode, not offline)
+            if self.serial is None:
+                self._set_status("serial", None)
+            else:
+                self._set_status(
+                    "serial", bool(getattr(self.serial, "connected", True))
+                )
+            if self.serial is None:
+                self._set_status("start", None)
+            else:
+                self._set_status(
+                    "start", bool(getattr(self.serial, "is_start_active", False))
+                )
+        except Exception:
+            logging.exception("Failed to refresh status bar")
+
     def _update_frame(self):
         """Render the active camera while capture workers feed both models."""
+        self._update_status()
         if not self._running:
             return
 
@@ -969,38 +1111,6 @@ class CompetitionUI(CalibrationUI):
                 self.root.after(30, self._update_frame)
             return
 
-        preferred_mode = "digit" if self.mode == "digit" else "bean"
-        fallback_mode = "bean" if preferred_mode == "digit" else "digit"
-        ok, display_frame, _sequence = self._latest_capture_snapshot(preferred_mode)
-        display_mode = preferred_mode
-        if not ok or display_frame is None:
-            ok, display_frame, _sequence = self._latest_capture_snapshot(
-                fallback_mode
-            )
-            display_mode = fallback_mode
-        if not ok or display_frame is None:
-            if self._running:
-                self.root.after(30, self._update_frame)
-            return
-
-        with self._result_lock:
-            zone_results = dict(self._zone_results.get(display_mode, {}))
-            dets = self._latest_dets.get(display_mode)
-            names = self._latest_names.get(display_mode)
-
-        if display_mode == "bean":
-            self._draw_bean_lines(display_frame)
-            model = self.bean_model
-        else:
-            self._draw_digit_lines(display_frame)
-            model = self.digit_model
-        if model is not None and dets is not None:
-            self._draw_detections(
-                display_frame, dets, names,
-                zone_results=zone_results, mode=display_mode,
-            )
-        self._draw_inferred_zone_labels(display_frame, zone_results, display_mode)
-
         try:
             avail_w = int(self._video_container.winfo_width())
             avail_h = int(self._video_container.winfo_height())
@@ -1009,13 +1119,53 @@ class CompetitionUI(CalibrationUI):
         if avail_w <= 1 or avail_h <= 1:
             avail_w, avail_h = self.window_width, self.video_max_height
 
+        state, frame = self._camera_state(self.mode)
+
+        if state == "offline":
+            self._show_frame(
+                self._render_placeholder(
+                    f"CAMERA OFFLINE: {self.mode.upper()}", avail_w, avail_h
+                )
+            )
+            if self._running:
+                self.root.after(30, self._update_frame)
+            return
+
+        if state == "waiting":
+            # First frame not delivered yet (e.g. startup) — this is not an
+            # offline alarm, so show a neutral placeholder while the status bar
+            # keeps reporting the live failure counters.
+            self._show_frame(
+                self._render_placeholder(
+                    "WAITING FOR CAMERA...", avail_w, avail_h, color=(160, 160, 160)
+                )
+            )
+            if self._running:
+                self.root.after(30, self._update_frame)
+            return
+
+        with self._result_lock:
+            zone_results = dict(self._zone_results.get(self.mode, {}))
+            dets = self._latest_dets.get(self.mode)
+            names = self._latest_names.get(self.mode)
+
+        if self.mode == "bean":
+            self._draw_bean_lines(frame)
+            model = self.bean_model
+        else:
+            self._draw_digit_lines(frame)
+            model = self.digit_model
+        if model is not None and dets is not None:
+            self._draw_detections(
+                frame, dets, names,
+                zone_results=zone_results, mode=self.mode,
+            )
+        self._draw_inferred_zone_labels(frame, zone_results, self.mode)
+
         display_frame = self._resize_for_display(
-            display_frame, max_w=avail_w, max_h=avail_h
+            frame, max_w=avail_w, max_h=avail_h
         )
-        rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-        imgtk = ImageTk.PhotoImage(image=Image.fromarray(rgb))
-        self.video_label.imgtk = imgtk
-        self.video_label.config(image=imgtk)
+        self._show_frame(display_frame)
 
         if self._running:
             self.root.after(30, self._update_frame)
@@ -1048,6 +1198,14 @@ class CompetitionUI(CalibrationUI):
             digit_dets = self._latest_dets.get("digit")
 
         if bean_dets is None or digit_dets is None:
+            return
+
+        # A camera confirmed offline must not contribute its stale detections
+        # to a new result frame; keep sending the last valid frame (sticky).
+        if not (
+            self._camera_capture_healthy("bean")
+            and self._camera_capture_healthy("digit")
+        ):
             return
 
         # Use logical completion to tolerate missing/duplicate zones

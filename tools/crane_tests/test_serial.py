@@ -172,13 +172,11 @@ def test_serial_thread_does_not_log_each_start_heartbeat(monkeypatch, caplog):
         def is_start_active(self, _timeout):
             return False
 
-    thread = SerialThread.__new__(SerialThread)
-    thread._port = HeartbeatPort()
-    thread._start_timeout = 0.3
-    thread._send_interval = 0.1
+    monkeypatch.setattr(
+        serial_port, "open_serial_port", lambda *a, **k: HeartbeatPort()
+    )
+    thread = SerialThread("/dev/ttyS1", 921600, timeout=0.05)
     thread._running = True
-    thread._reported_missing_frame = False
-    thread._reported_transmission = False
 
     def stop_after_iteration(_seconds):
         thread._running = False
@@ -251,3 +249,125 @@ def test_open_serial_port_uses_eight_n_one():
         )
     assert isinstance(port, SerialPort)
     assert port.ser is fake_ser
+
+
+class _FailingSerialPort:
+    """SerialPort stand-in whose poll_start() always raises."""
+
+    def poll_start(self):
+        raise OSError("port gone")
+
+    def is_start_active(self, _timeout):
+        return False
+
+    def close(self):
+        pass
+
+
+def _make_failing_thread(monkeypatch, **thread_kwargs):
+    """Build a SerialThread backed by an always-failing fake port factory."""
+    import models.serial_port as serial_port
+
+    created = []
+
+    def fake_open_serial_port(device, baudrate, timeout=0.05):
+        del device, baudrate, timeout
+        port = _FailingSerialPort()
+        created.append(port)
+        return port
+
+    monkeypatch.setattr(serial_port, "open_serial_port", fake_open_serial_port)
+
+    thread = SerialThread(
+        "/dev/ttyS1", 921600, timeout=0.05, **thread_kwargs
+    )
+    thread._running = True
+    return thread, created, serial_port
+
+
+def _run_until_stopped(thread, serial_port, monkeypatch):
+    """Drive SerialThread._run(); sleep no-ops and stop the loop after a bit."""
+    sleeps = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["count"] += 1
+        if sleeps["count"] >= 6:
+            thread._running = False
+
+    monkeypatch.setattr(serial_port.time, "sleep", fake_sleep)
+    thread._run()
+
+
+def test_serial_thread_reopens_after_sustained_exceptions(monkeypatch):
+    thread, created, serial_port = _make_failing_thread(
+        monkeypatch, reconnect_after=1, reconnect_interval=0.0
+    )
+    _run_until_stopped(thread, serial_port, monkeypatch)
+
+    # The first failure (>= reconnect_after) reopened the dead handle.
+    assert len(created) > 1
+
+
+def test_serial_thread_reconnect_interval_rate_limits(monkeypatch):
+    thread, created, serial_port = _make_failing_thread(
+        monkeypatch, reconnect_after=1, reconnect_interval=5.0
+    )
+    # Simulate a recent reopen so the interval guard rate-limits the next one.
+    thread._last_reopen_at = time.monotonic()
+    _run_until_stopped(thread, serial_port, monkeypatch)
+
+    # With a long interval no reopen happens after the initial open.
+    assert len(created) == 1
+
+
+def test_serial_thread_no_reopen_when_reconnect_disabled(monkeypatch):
+    thread, created, serial_port = _make_failing_thread(
+        monkeypatch, reconnect_enabled=False, reconnect_after=1,
+        reconnect_interval=0.0,
+    )
+    _run_until_stopped(thread, serial_port, monkeypatch)
+
+    assert len(created) == 1
+
+
+def test_serial_thread_connected_property():
+    thread = SerialThread.__new__(SerialThread)
+    thread._port = None
+    assert thread.connected is False
+
+    thread._port = object()
+    assert thread.connected is True
+
+
+def test_serial_thread_survives_failed_reopen(monkeypatch):
+    """A failed reopen leaves _port None; _run must not crash and keeps retrying."""
+    import models.serial_port as serial_port
+
+    calls = {"n": 0}
+
+    def fake_open_serial_port(device, baudrate, timeout=0.05):
+        del device, baudrate, timeout
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _FailingSerialPort()
+        raise OSError("device gone")  # every reopen fails -> _port becomes None
+
+    monkeypatch.setattr(serial_port, "open_serial_port", fake_open_serial_port)
+
+    thread = SerialThread(
+        "/dev/ttyS1", 921600, timeout=0.05,
+        reconnect_after=1, reconnect_interval=0.0,
+    )
+    thread._running = True
+    sleeps = {"count": 0}
+
+    def fake_sleep(_seconds):
+        sleeps["count"] += 1
+        if sleeps["count"] >= 6:
+            thread._running = False
+
+    monkeypatch.setattr(serial_port.time, "sleep", fake_sleep)
+    thread._run()  # must return without raising despite _port being None
+
+    assert thread._port is None
+    assert calls["n"] >= 2  # initial open + at least one reopen attempt

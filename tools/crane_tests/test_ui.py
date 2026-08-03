@@ -15,7 +15,12 @@ from unittest.mock import MagicMock
 
 from models.camera import MockCamera
 from models.config_binding import ConfigBinding
-from models.ui import CalibrationUI, CompetitionUI, _InferenceRateMeter
+from models.ui import (
+    CalibrationUI,
+    CompetitionUI,
+    CAPTURE_OFFLINE_AFTER_FAILURES,
+    _InferenceRateMeter,
+)
 from calibrate import run_calibration
 
 
@@ -377,20 +382,36 @@ def test_competition_renders_only_the_active_camera(tmp_path, monkeypatch):
         str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
         root=MagicMock(), start_serial=False,
     )
-    snapshots = []
+    ui._capture_ready["bean"] = True
+    ui._captured_frames["bean"] = frame
 
-    def snapshot(mode):
-        snapshots.append(mode)
-        return True, frame.copy(), 1
+    queried = []
+    original_camera_state = ui._camera_state
 
-    monkeypatch.setattr(ui, "_latest_capture_snapshot", snapshot)
+    def tracking_camera_state(mode):
+        queried.append((mode, original_camera_state(mode)))
+        return queried[-1][1]
+
+    shown = []
+    original_show_frame = ui._show_frame
+
+    def tracking_show_frame(display_frame):
+        shown.append(display_frame)
+        original_show_frame(display_frame)
+
+    monkeypatch.setattr(ui, "_camera_state", tracking_camera_state)
+    monkeypatch.setattr(ui, "_show_frame", tracking_show_frame)
     ui._running = True
     try:
         ui._update_frame()
     finally:
         ui._running = False
 
-    assert snapshots == ["bean"]
+    # Only the active camera is queried; the other camera is never consulted
+    # as a fallback.
+    assert queried == [("bean", ("ok", frame))]
+    # A real frame is rendered, not an offline placeholder.
+    assert len(shown) == 1
 
 
 def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
@@ -975,3 +996,155 @@ def test_mode_switch_clears_stale_detection_results(tmp_path):
     ui._set_mode("digit")
     assert ui._latest_dets["digit"] is None
     assert ui._latest_names["digit"] is None
+
+
+def test_competition_update_frame_offline_shows_placeholder_not_other_camera(
+    tmp_path, monkeypatch
+):
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    digit_frame = np.full((480, 640, 3), 99, dtype=np.uint8)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    ui.mode = "bean"
+    ui._capture_ready = {"bean": False, "digit": True}
+    ui._capture_failures = {
+        "bean": CAPTURE_OFFLINE_AFTER_FAILURES, "digit": 0,
+    }
+    ui._captured_frames = {"bean": frame, "digit": digit_frame}
+
+    placeholder = np.zeros((10, 10, 3), dtype=np.uint8)
+    shown = []
+    monkeypatch.setattr(ui, "_render_placeholder", lambda *a, **k: placeholder)
+    monkeypatch.setattr(
+        ui, "_show_frame", lambda display_frame: shown.append(display_frame)
+    )
+    ui._running = True
+    try:
+        ui._update_frame()
+    finally:
+        ui._running = False
+
+    # Offline shows the placeholder; the other camera's frame is never rendered.
+    assert shown == [placeholder]
+
+
+def test_competition_update_frame_shows_live_frame_when_ok(tmp_path, monkeypatch):
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    ui.mode = "bean"
+    ui._capture_ready = {"bean": True, "digit": False}
+    ui._capture_failures = {"bean": 0, "digit": 0}
+    ui._captured_frames = {"bean": frame, "digit": None}
+
+    shown = []
+    monkeypatch.setattr(ui, "_render_placeholder", lambda *a, **k: object())
+    monkeypatch.setattr(ui, "_resize_for_display", lambda f, **k: f)
+    monkeypatch.setattr(
+        ui, "_show_frame", lambda display_frame: shown.append(display_frame)
+    )
+    ui._running = True
+    try:
+        ui._update_frame()
+    finally:
+        ui._running = False
+
+    assert shown == [frame]
+
+
+def test_competition_update_frame_waiting_uses_neutral_text_not_offline(
+    tmp_path, monkeypatch
+):
+    """Startup (no frame, no failures yet) must not show the offline alarm."""
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    ui.mode = "bean"
+    # Startup state: no frame delivered yet, and no confirmed failures.
+    ui._capture_ready = {"bean": False, "digit": False}
+    ui._capture_failures = {"bean": 0, "digit": 0}
+    ui._captured_frames = {"bean": None, "digit": None}
+
+    placeholder_args = []
+
+    def recording_placeholder(*args, **kwargs):
+        placeholder_args.append((args, kwargs))
+        return np.zeros((480, 640, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(ui, "_render_placeholder", recording_placeholder)
+    monkeypatch.setattr(ui, "_show_frame", lambda _frame: None)
+    ui._running = True
+    try:
+        ui._update_frame()
+    finally:
+        ui._running = False
+
+    assert placeholder_args, "placeholder should be rendered while waiting"
+    text = placeholder_args[0][0][0]
+    assert "WAITING" in text
+    assert "OFFLINE" not in text
+
+
+def test_competition_update_status_maps_offline_states(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    serial = MagicMock()
+    serial.connected = False
+    serial.is_start_active = False
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    ui._capture_failures = {
+        "bean": CAPTURE_OFFLINE_AFTER_FAILURES, "digit": 0,
+    }
+
+    ui._update_status()
+
+    assert ui._status_states["bean"] is False
+    assert ui._status_states["digit"] is True
+    assert ui._status_states["serial"] is False
+    assert ui._status_states["start"] is False
+    ui._status_labels["bean"].config.assert_called_with(
+        text="BEAN: OFFLINE", bg="#aa0000"
+    )
+    ui._status_labels["serial"].config.assert_called_with(
+        text="SERIAL: OFFLINE", bg="#aa0000"
+    )
+
+
+def test_competition_capture_worker_invalidates_detections_after_offline(
+    tmp_path, monkeypatch
+):
+    cfg_path = _write_cfg(tmp_path)
+    failing_camera = MagicMock()
+    failing_camera.capture.return_value = (False, None)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    ui._capture_failures["bean"] = CAPTURE_OFFLINE_AFTER_FAILURES - 1
+    ui._latest_dets["bean"] = [[1, 2, 3, 4, 0.9, 0]]
+    ui._latest_names["bean"] = {0: "bean"}
+
+    waits = {"n": 0}
+
+    def counting_wait(timeout=None):
+        del timeout
+        waits["n"] += 1
+        if waits["n"] >= 2:
+            ui._capture_stop.set()
+        return False
+
+    monkeypatch.setattr(ui._capture_stop, "wait", counting_wait)
+    ui._capture_worker("bean", failing_camera)
+
+    assert ui._latest_dets["bean"] is None
+    assert ui._latest_names["bean"] is None

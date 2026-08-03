@@ -56,6 +56,7 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
     """
     if mock:
         return MockCamera(camera_cfg["width"], camera_cfg["height"])
+    reconnect_cfg = camera_cfg.get("reconnect", {}) or {}
     try:
         return Camera(
             camera_cfg["device"],
@@ -66,6 +67,9 @@ def open_camera(camera_cfg, mock=False, fallback_empty=False):
             auto_exposure=camera_cfg.get("auto_exposure", True),
             exposure=camera_cfg.get("exposure"),
             grayscale=camera_cfg.get("grayscale", False),
+            reconnect_enabled=reconnect_cfg.get("enabled", True),
+            reconnect_after=reconnect_cfg.get("after_failures", 3),
+            reconnect_interval=reconnect_cfg.get("interval_sec", 1.0),
         )
     except RuntimeError:
         if fallback_empty:
