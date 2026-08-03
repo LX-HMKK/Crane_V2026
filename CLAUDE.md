@@ -12,9 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 ```text
 assets/            # 训练好的模型产物（.pt、.onnx、.bin）
-                   #   num.* / num_v6.bin – 数字检测器
-                   #   beans_v4.* / beans_v5.bin – 豆子成熟度检测器
-                   #   *_rdkx5_config.yaml – BPU 部署配置
+                   #   num.* / num_v6.* – 数字检测器
+                   #   beans_v6.* – 豆子成熟度检测器
+                   #   *.yaml（beans.yaml / num.yaml）– BPU 部署配置
 configs/           # 运行时配置
                    #   vision.yaml – 串口、相机、模型、辅助线、映射
                    #   vision_1024x600_test.yaml – 1024×600 备选配置

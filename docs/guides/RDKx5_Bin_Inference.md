@@ -28,10 +28,10 @@
 | 文件 | 来源 | 作用 |
 |------|------|------|
 | `tools/99-crane-cameras.rules` | 本项目 | USB 摄像头 udev 绑定规则（复制到 `/etc/udev/rules.d/`） |
-| `assets/beans_v4.bin` | 本项目 | 豆子成熟度 BPU 模型 |
-| `assets/num.bin` | 本项目 | 数字检测 BPU 模型 |
-| `assets/beans_v4_rdkx5_config.yaml` | 本项目 | 豆子模型配置（nc、names、imgsz、reg_max、strides） |
-| `assets/num_rdkx5_config.yaml` | 本项目 | 数字模型配置 |
+| `assets/beans_v6.bin` | 本项目 | 豆子成熟度 BPU 模型 |
+| `assets/num_v6.bin` | 本项目 | 数字检测 BPU 模型 |
+| `assets/beans.yaml` | 本项目 | 豆子模型配置（nc、names、imgsz、reg_max、strides） |
+| `assets/num.yaml` | 本项目 | 数字模型配置 |
 | `models/` | 本项目 | 视觉运行时源码包 |
 | `scripts/main_arm64.py` | 本项目 | 板端竞赛入口 / 校准 UI |
 | `scripts/watchdog.sh` | 本项目 | 自启动 / 崩溃重启 |
@@ -40,8 +40,8 @@
 从开发机拷到板端示例：
 ```bash
 scp -r models/ scripts/ configs/ tools/99-crane-cameras.rules \
-    assets/beans_v4.bin assets/num.bin \
-    assets/beans_v4_rdkx5_config.yaml assets/num_rdkx5_config.yaml \
+    assets/beans_v6.bin assets/num_v6.bin \
+    assets/beans.yaml assets/num.yaml \
     rdkx5:/home/root/crane/
 ```
 
@@ -49,7 +49,7 @@ scp -r models/ scripts/ configs/ tools/99-crane-cameras.rules \
 
 ## 3. 配置文件说明
 
-`<name>_rdkx5_config.yaml` 字段（以 `beans_v4` 为例）：
+`<name>.yaml` 部署配置字段（以 `beans.yaml` 为例）：
 
 ```yaml
 imgsz: 640              # 输入尺寸（int 或 [h,w]）

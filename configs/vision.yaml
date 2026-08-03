@@ -42,14 +42,14 @@ cameras:
 models:
   bean:
     bin: assets/beans_v6.bin
-    cfg: assets/beans_v4_rdkx5_config.yaml
-    pt: assets/beans_v4.pt
+    cfg: assets/beans.yaml
+    pt: assets/beans_v6.pt
     conf_thres: 0.7
     iou_thres: 0.45
   digit:
     bin: assets/num_v6.bin
-    cfg: assets/num_rdkx5_config.yaml
-    pt: assets/num.pt
+    cfg: assets/num.yaml
+    pt: assets/num_v6.pt
     conf_thres: 0.7
     iou_thres: 0.45
 inference:

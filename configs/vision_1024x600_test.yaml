@@ -67,15 +67,15 @@ cameras:
 # iou_thres  : 该模型的 NMS IoU 阈值；若省略，则使用下面 inference.iou_thres。
 models:
   bean:
-    bin: assets/beans_v4.bin
-    cfg: assets/beans_v4_rdkx5_config.yaml
-    pt: assets/beans_v4.pt
+    bin: assets/beans_v6.bin
+    cfg: assets/beans.yaml
+    pt: assets/beans_v6.pt
     conf_thres: 0.7
     iou_thres: 0.45
   digit:
-    bin: assets/num.bin
-    cfg: assets/num_rdkx5_config.yaml
-    pt: assets/num.pt
+    bin: assets/num_v6.bin
+    cfg: assets/num.yaml
+    pt: assets/num_v6.pt
     conf_thres: 0.7
     iou_thres: 0.45
 
