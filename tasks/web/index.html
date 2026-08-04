@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Crane Vision</title>
+<style>
+  :root {
+    --bg: #111; --panel: #1c1c1e; --fg: #eee; --muted: #888;
+    --green: #0a0; --blue: #06c; --red: #a33; --gray: #555;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; background: var(--bg); color: var(--fg);
+    font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif;
+    overflow: hidden; user-select: none; -webkit-user-select: none; }
+  #app { display: flex; flex-direction: column; height: 100%; }
+  #video-wrap { flex: 1; min-height: 0; background: #000; position: relative; }
+  #video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  #statusbar { position: absolute; top: 8px; left: 8px; display: flex;
+    gap: 6px; z-index: 2; }
+  .chip { padding: 4px 10px; border-radius: 4px; font-size: 13px;
+    font-weight: 600; color: #fff; background: var(--gray); }
+  .chip.ok { background: #060; }
+  .chip.err { background: #a00; }
+  .chip.na { background: #666; }
+  #fps { position: absolute; top: 8px; right: 10px; z-index: 2;
+    font-size: 13px; color: #ccc; background: rgba(0,0,0,.55);
+    padding: 4px 8px; border-radius: 4px; }
+  #controls { background: var(--panel); padding: 8px 10px 10px; }
+  #tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  button { border: 0; border-radius: 6px; color: #fff; font-size: 15px;
+    font-weight: 600; padding: 10px 18px; cursor: pointer; background: var(--gray); }
+  button.active { background: var(--blue); }
+  #tab-bean.active { background: var(--green); }
+  #tab-digit.active, #tab-settings.active { background: var(--blue); }
+  #save { background: var(--blue); margin-left: auto; }
+  #save.saved { background: #060; }
+  #save.error { background: #a00; }
+  #exit { background: var(--red); }
+  #sliders { display: flex; flex-wrap: wrap; gap: 8px 22px; }
+  .slider-row { display: flex; align-items: center; gap: 10px;
+    min-width: 320px; flex: 1; }
+  .slider-row label { width: 150px; font-size: 14px; color: #ddd;
+    text-align: right; }
+  .slider-row input[type=range] { flex: 1; height: 32px; accent-color: var(--blue); }
+  .slider-row .val { width: 64px; font-size: 14px; color: #8cf;
+    font-variant-numeric: tabular-nums; }
+  .slider-row input[type=checkbox] { width: 26px; height: 26px;
+    accent-color: var(--blue); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="video-wrap">
+    <img id="video" alt="preview">
+    <div id="statusbar">
+      <span class="chip" id="st-bean">BEAN</span>
+      <span class="chip" id="st-digit">DIGIT</span>
+      <span class="chip" id="st-serial">SERIAL</span>
+      <span class="chip" id="st-start">START</span>
+    </div>
+    <div id="fps">—</div>
+  </div>
+  <div id="controls">
+    <div id="tabs">
+      <button id="tab-bean">BEAN (1)</button>
+      <button id="tab-digit">DIGIT (2)</button>
+      <button id="tab-settings">SETTINGS (3)</button>
+      <button id="save">SAVE</button>
+      <button id="exit">EXIT</button>
+    </div>
+    <div id="sliders"></div>
+  </div>
+</div>
+<script>
+(() => {
+  let view = 'bean';
+  let fields = [];
+  const video = document.getElementById('video');
+  const slidersEl = document.getElementById('sliders');
+
+  function setStream() {
+    video.src = '/stream.mjpeg?cam=' + (view === 'digit' ? 'digit' : 'bean')
+              + '&_=' + Date.now();
+  }
+
+  function setView(v) {
+    view = v;
+    for (const name of ['bean', 'digit', 'settings']) {
+      document.getElementById('tab-' + name).classList.toggle('active', name === v);
+    }
+    if (v !== 'settings') setStream();
+    renderSliders();
+  }
+
+  async function loadConfig() {
+    const resp = await fetch('/api/config');
+    const data = await resp.json();
+    fields = data.fields;
+    renderSliders();
+  }
+
+  function renderSliders() {
+    slidersEl.innerHTML = '';
+    for (const f of fields.filter(f => f.view === view ||
+        (view !== 'settings' && f.view === view))) {
+      const row = document.createElement('div');
+      row.className = 'slider-row';
+      const label = document.createElement('label');
+      label.textContent = f.label;
+      row.appendChild(label);
+      const val = document.createElement('span');
+      val.className = 'val';
+      if (f.type === 'bool') {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = !!f.value;
+        cb.onchange = () => postField(f.key, cb.checked);
+        row.appendChild(cb);
+        val.textContent = cb.checked ? 'ON' : 'OFF';
+        cb.addEventListener('change', () => val.textContent = cb.checked ? 'ON' : 'OFF');
+      } else {
+        const sl = document.createElement('input');
+        sl.type = 'range';
+        sl.min = f.min; sl.max = f.max; sl.step = f.step;
+        sl.value = f.value;
+        val.textContent = fmt(f.value, f.step);
+        let timer = null;
+        sl.oninput = () => {
+          val.textContent = fmt(sl.value, f.step);
+          clearTimeout(timer);
+          timer = setTimeout(() => postField(f.key, sl.value), 120);
+        };
+        row.appendChild(sl);
+      }
+      row.appendChild(val);
+      slidersEl.appendChild(row);
+    }
+  }
+
+  function fmt(v, step) {
+    return step < 1 ? Number(v).toFixed(2) : String(Math.round(v));
+  }
+
+  async function postField(key, value) {
+    try {
+      await fetch('/api/config?key=' + encodeURIComponent(key) +
+                  '&value=' + encodeURIComponent(value), { method: 'POST' });
+    } catch (e) { console.warn(e); }
+  }
+
+  async function pollStatus() {
+    try {
+      const s = await (await fetch('/api/status')).json();
+      setChip('st-bean', 'BEAN: ' + (s.bean === 'ok' ? 'OK' : 'OFFLINE'), s.bean);
+      setChip('st-digit', 'DIGIT: ' + (s.digit === 'ok' ? 'OK' : 'OFFLINE'), s.digit);
+      if (s.serial === 'na') {
+        setChip('st-serial', 'SERIAL: N/A', 'na');
+      } else {
+        setChip('st-serial', 'SERIAL: ' + (s.serial === 'ok' ? 'OK' : 'OFFLINE'), s.serial);
+      }
+      setChip('st-start', 'START: ' + (s.start ? 'ON' : 'OFF'), s.start ? 'ok' : 'off');
+      document.getElementById('fps').textContent =
+        'bean ' + s.bean_fps.toFixed(1) + ' fps | digit ' + s.digit_fps.toFixed(1) + ' fps'
+        + (s.frame ? ' | ' + s.frame.join(' ') : '');
+    } catch (e) { /* server restarting */ }
+  }
+
+  function setChip(id, text, state) {
+    const el = document.getElementById(id);
+    el.textContent = text;
+    el.className = 'chip ' + (state === 'ok' ? 'ok' : state === 'na' || state === 'off' ? 'na' : 'err');
+  }
+
+  document.getElementById('tab-bean').onclick = () => setView('bean');
+  document.getElementById('tab-digit').onclick = () => setView('digit');
+  document.getElementById('tab-settings').onclick = () => setView('settings');
+  document.getElementById('save').onclick = async (ev) => {
+    const btn = ev.target;
+    try {
+      const r = await fetch('/api/save', { method: 'POST' });
+      const ok = (await r.json()).ok;
+      btn.textContent = ok ? 'SAVED ✓' : 'ERROR';
+      btn.className = ok ? 'saved' : 'error';
+    } catch (e) {
+      btn.textContent = 'ERROR'; btn.className = 'error';
+    }
+    setTimeout(() => { btn.textContent = 'SAVE'; btn.className = ''; }, 1500);
+  };
+  document.getElementById('exit').onclick = async () => {
+    if (!confirm('退出 Crane Vision?')) return;
+    try { await fetch('/api/exit', { method: 'POST' }); } catch (e) {}
+    document.body.innerHTML = '<h1 style="margin:40px;text-align:center">已退出</h1>';
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '1') setView('bean');
+    else if (e.key === '2') setView('digit');
+    else if (e.key === '3') setView('settings');
+    else if (e.key === 'f') toggleFullscreen();
+  });
+
+  // 强制全屏：首次交互时请求浏览器全屏。
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  }
+  document.addEventListener('pointerdown', function once() {
+    document.removeEventListener('pointerdown', once);
+    document.documentElement.requestFullscreen().catch(() => {});
+  });
+
+  setView('bean');
+  loadConfig();
+  setInterval(pollStatus, 500);
+  pollStatus();
+})();
+</script>
+</body>
+</html>

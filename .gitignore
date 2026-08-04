@@ -1,0 +1,9 @@
+build/
+tools/onnxruntime/
+*.o
+*.so
+__pycache__/
+.vscode/
+.data/
+tests/data/reference_dets.json.lock
+.git-msg

@@ -1,0 +1,11 @@
+imgsz: 640
+nc: 5
+names:
+  0: "1"
+  1: "2"
+  2: "3"
+  3: "4"
+  4: "5"
+reg_max: 16
+strides: [8, 16, 32]
+task: detect

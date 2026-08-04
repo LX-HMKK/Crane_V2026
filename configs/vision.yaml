@@ -1,0 +1,97 @@
+serial:
+  port: /dev/ttyS1
+  baudrate: 921600
+  timeout: 0.05
+  # 掉线重连：连续失败 after_failures 次后自动重开串口
+  reconnect:
+    enabled: true
+    after_failures: 5
+    interval_sec: 1.0
+protocol:
+  start_timeout_sec: 0.3
+  send_interval_sec: 0.05
+cameras:
+  bean:
+    device: /dev/crane_cam_beans
+    width: 1280
+    height: 720
+    fps: 30
+    buffer_size: 1
+    auto_exposure: true
+    exposure: 10000
+    grayscale: false
+    # 掉线重连：连续失败 after_failures 次后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
+  digit:
+    device: /dev/crane_cam_digit
+    width: 1280
+    height: 720
+    fps: 30
+    buffer_size: 1
+    auto_exposure: true
+    exposure: 166
+    grayscale: true
+    # 掉线重连：连续失败 after_failures 次后自动重开相机
+    reconnect:
+      enabled: true
+      after_failures: 3
+      interval_sec: 1.0
+models:
+  bean:
+    bin: assets/beans_v6.bin
+    cfg: assets/beans.yaml
+    pt: assets/beans_v6.pt
+    onnx: assets/beans_v6.onnx
+    conf_thres: 0.7
+    iou_thres: 0.45
+  digit:
+    bin: assets/num_v6.bin
+    cfg: assets/num.yaml
+    pt: assets/num_v6.pt
+    onnx: assets/num_v6.onnx
+    conf_thres: 0.7
+    iou_thres: 0.45
+inference:
+  imgsz: 640
+  conf_thres: 0.25
+  iou_thres: 0.45
+  pad: 127
+ui:
+  window:
+    fullscreen: true
+    width: 1024
+    height: 600
+  video:
+    max_height: 420
+    fit_mode: contain
+  controls:
+    touch_mode: true
+    slider_width: 16
+    slider_height: 32
+    button_height: 20
+    padding: 1
+    font_scale: 0.8
+    inference_overlay: true
+scan:
+  frames: 2
+lines:
+  bean:
+    left_x: 515
+    right_x: 780
+  digit:
+    x1: 251
+    x2: 515
+    x3: 764
+    x4: 1046
+logic:
+  confidence_threshold: 0.5
+  max_inferred_beans: 1
+  max_inferred_digits: 2
+mapping:
+  bean_to_digit:
+    yellow: 1
+    green: 2
+    white: 3

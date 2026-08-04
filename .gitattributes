@@ -1,0 +1,4 @@
+# 跨平台构建（WSL2 / RDK X5 Linux）：脚本与 CMake 文件必须 LF
+*.sh            text eol=lf
+*.cmake         text eol=lf
+CMakeLists.txt  text eol=lf
