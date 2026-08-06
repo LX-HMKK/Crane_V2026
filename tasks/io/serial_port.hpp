@@ -114,6 +114,12 @@ class SerialThread {
 
   bool connected() const;
   bool is_start_active() const;
+  // True while the RX loop is actively polling without error. During the 1s
+  // error-backoff pause the thread cannot read START, so last_start_time_
+  // ages out; the recognition gate treats an unhealthy RX loop as fail-open.
+  bool rx_healthy() const {
+    return rx_healthy_.load(std::memory_order_relaxed);
+  }
 
   void start();
   void stop();
@@ -147,6 +153,7 @@ class SerialThread {
   std::optional<FramePayload> current_frame_;
 
   std::atomic<bool> running_{false};
+  std::atomic<bool> rx_healthy_{true};
   std::thread thread_;
   bool reported_missing_frame_ = false;
   bool reported_transmission_ = false;

@@ -5,17 +5,21 @@ Runs crane_vision with a pseudo-terminal standing in for the serial UART and
 verifies the recognition gate end to end:
 
   Run A (mock cameras): gate opens on START, closes when START drops, DEBUG
-      forces recognition. Signalled by inference fps (5s rate window) and by
-      task-log activity (mock scenes are logic-rejected, so task lines only
-      appear while recognition actually runs).
-  Run B (static images): a valid 12-byte result is produced only under START,
-      stays sticky after START drops.
+      forces recognition. Signalled by task-log activity (mock scenes are
+      logic-rejected, so task lines only appear while recognition runs) and by
+      the live recognition status flag.
+  Run B (static images): a valid result FramePayload is produced only under
+      START, stays sticky after START drops, and the encoded 12-byte frame is
+      actually transmitted over the (pty) serial link. Serial frame encoding /
+      START-parsing itself is covered by the C++ test_serial unit test.
 
-Usage (inside the WSL build env):  python3 scripts/test_start_gate.py
+Usage (inside the WSL build env):  python3 tests/test_start_gate.py
 """
+import fcntl
 import json
 import os
 import pty
+import select
 import subprocess
 import sys
 import threading
@@ -63,10 +67,6 @@ def check(name, cond, detail=""):
     print("  [%s] %s %s" % ("PASS" if cond else "FAIL", name, detail))
     if not cond:
         failures.append(name)
-
-
-def fps(s):
-    return s["bean_fps"] + s["digit_fps"]
 
 
 def launched(extra_args):
@@ -118,6 +118,26 @@ def send_start(master, seconds, interval=0.1):
         time.sleep(interval)
 
 
+def read_master(master, timeout):
+    """Collect bytes the app wrote to the pty slave (serial TX frames)."""
+    out = b""
+    end = time.time() + timeout
+    flags = fcntl.fcntl(master, fcntl.F_GETFL)
+    fcntl.fcntl(master, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    try:
+        while time.time() < end:
+            try:
+                chunk = os.read(master, 4096)
+                out += chunk
+            except BlockingIOError:
+                time.sleep(0.1)
+            except OSError:
+                break
+    finally:
+        fcntl.fcntl(master, fcntl.F_SETFL, flags)
+    return out
+
+
 def run_a():
     print("== Run A: mock cameras — gate open/close + DEBUG ==")
     master, app, logf = launched(["--mock-cameras"])
@@ -162,13 +182,20 @@ def run_a():
         check("A.DEBUG-on debug flag", s["debug"] is True, s)
         check("A.DEBUG-on gate forced open", s["recognition"] is True, s)
         check("A.DEBUG-on start still off", s["start"] is False, s)
-        time.sleep(6.0)  # full rate window with DEBUG on -> fps > 0
-        s = http("/api/status")
-        check("A.DEBUG-on inference ran (fps > 0)", fps(s) > 0, s)
+        # Task lines resume: with the failure counter already past its warning
+        # threshold, "No valid result" errors re-fire every 5s while inference
+        # runs, so a ~6s window guarantees new activity iff DEBUG forced it.
+        dbg_base = task_lines()
+        time.sleep(6.0)
+        check("A.DEBUG-on inference ran (task activity)",
+              task_lines() > dbg_base,
+              "base=%d now=%d" % (dbg_base, task_lines()))
 
-        # DEBUG off -> gated off again
+        # DEBUG off -> gated off again. Drain in-flight work first: a predict
+        # already past the consume gate publishes after the gate closes (no
+        # publish-side gate), so its task line must land in the baseline.
         post("/api/debug?mode=0")
-        time.sleep(0.5)
+        time.sleep(1.5)
         s = http("/api/status")
         check("A.DEBUG-off debug flag", s["debug"] is False, s)
         check("A.DEBUG-off gate closed", s["recognition"] is False, s)
@@ -204,6 +231,19 @@ def run_b():
         check("B.START valid result produced",
               task_lines() > base and s["frame"] is not None, s)
         print("  frame =", s["frame"])
+
+        # Serial TX: while START was active the app must have transmitted the
+        # encoded 12-byte frame A5 5A <payload> 0D 0A to the (pty) master.
+        # Buffered frames are still readable after START times out.
+        if s["frame"] is not None:
+            raw = read_master(master, 1.5)
+            expected = (bytes([0xA5, 0x5A]) + bytes(s["frame"]) +
+                        bytes([0x0D, 0x0A]))
+            check("B.serial TX transmitted 12-byte frame", expected in raw,
+                  "got %d raw bytes" % len(raw))
+        else:
+            check("B.serial TX transmitted 12-byte frame", False,
+                  "no frame to check")
 
         time.sleep(2.0)  # past start_timeout_sec=0.3
         s = http("/api/status")

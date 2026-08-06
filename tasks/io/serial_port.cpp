@@ -336,6 +336,7 @@ void SerialThread::run() {
         continue;
       }
       port->poll_start();
+      rx_healthy_.store(true, std::memory_order_relaxed);
       if (port->is_start_active(start_timeout_)) {
         auto frame = current_frame();
         if (frame.has_value()) {
@@ -360,6 +361,7 @@ void SerialThread::run() {
       }
       consecutive_failures_ = 0;
     } catch (const std::exception& e) {
+      rx_healthy_.store(false, std::memory_order_relaxed);
       ++consecutive_failures_;
       maybe_reopen();
       LOG_ERROR("SerialThread send failed: %s", e.what());

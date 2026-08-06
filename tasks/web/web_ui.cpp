@@ -243,14 +243,15 @@ HttpServer::Response WebUi::handle_set_config(const HttpServer::Request& req) {
 }
 
 HttpServer::Response WebUi::handle_debug(const HttpServer::Request& req) {
-  auto params = req.query;
-  if (params.empty() && !req.body.empty()) params = parse_query(req.body);
-  bool on = true;
-  auto mit = params.find("mode");
-  if (mit != params.end()) {
-    on = !(mit->second == "0" || mit->second == "off" ||
-           mit->second == "false");
+  // Require an explicit mode: a bare POST (or a JSON body, which parse_query
+  // cannot decode) must not silently force recognition on — that would bypass
+  // the START safety gate. The bundled UI always sends ?mode=0|1.
+  auto mit = req.query.find("mode");
+  if (mit == req.query.end()) {
+    return {400, "text/plain; charset=utf-8", "missing mode=0|1 parameter"};
   }
+  bool on = !(mit->second == "0" || mit->second == "off" ||
+              mit->second == "false");
   app_.set_debug_mode(on);
   HttpServer::Response resp;
   resp.content_type = "application/json";

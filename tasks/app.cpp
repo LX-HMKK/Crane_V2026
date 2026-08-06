@@ -487,6 +487,11 @@ bool CompetitionApp::recognition_enabled() const {
   // recognition. TX stays separately START-gated, so nothing transmits while
   // the MCU is not signalling.
   if (!serial_ || !serial_->connected()) return true;
+  // The serial RX loop is in its 1s error-backoff pause: it cannot read START
+  // during that window, so a strict START check would freeze perception. Fail
+  // open while the RX loop is unhealthy, consistent with the no-serial /
+  // disconnected cases.
+  if (!serial_->rx_healthy()) return true;
   return serial_->is_start_active();
 }
 
@@ -748,9 +753,9 @@ bool CompetitionApp::render_view(Channel ch, cv::Mat& out) {
 
   // Status bar (bottom-left): BEAN / DIGIT / SERIAL / START.
   Status s = status();
-  auto chip = [&](int x, const std::string& text, bool ok, bool na) {
-    cv::Scalar bg = na ? cv::Scalar(102, 102, 102)
-                       : (ok ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
+  // Status chip: draws a filled label and returns the next x. Callers pick
+  // the background color (green ok / red err / gray na / orange debug).
+  auto chip = [&](int x, const std::string& text, const cv::Scalar& bg) {
     int baseline = 0;
     cv::Size ts =
         cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
@@ -761,41 +766,31 @@ bool CompetitionApp::render_view(Channel ch, cv::Mat& out) {
                 {255, 255, 255}, 1);
     return x + ts.width + 20;
   };
-  // Colored variant for DEBUG / REC chips (no ok/na semantics).
-  auto color_chip = [&](int x, const std::string& text,
-                        const cv::Scalar& bg) {
-    int baseline = 0;
-    cv::Size ts = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1,
-                                  &baseline);
-    int y = frame.rows - 10;
-    cv::rectangle(frame, {x, y - ts.height - 8}, {x + ts.width + 12, y + 4},
-                  bg, cv::FILLED);
-    cv::putText(frame, text, {x + 6, y - 4}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                {255, 255, 255}, 1);
-    return x + ts.width + 20;
-  };
   int x = 8;
-  x = chip(x, s.bean_online ? "BEAN: OK" : "BEAN: OFFLINE", s.bean_online,
-           false);
+  x = chip(x, s.bean_online ? "BEAN: OK" : "BEAN: OFFLINE",
+           s.bean_online ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
   x = chip(x, s.digit_online ? "DIGIT: OK" : "DIGIT: OFFLINE",
-           s.digit_online, false);
+           s.digit_online ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
   x = chip(x,
            !s.serial_present
                ? "SERIAL: N/A"
                : (s.serial_connected ? "SERIAL: OK" : "SERIAL: OFFLINE"),
-           s.serial_connected, !s.serial_present);
+           !s.serial_present
+               ? cv::Scalar(102, 102, 102)
+               : (s.serial_connected ? cv::Scalar(0, 102, 0)
+                                     : cv::Scalar(0, 0, 170)));
   if (s.serial_present) {
-    x = chip(x, s.start_active ? "START: ON" : "START: OFF", s.start_active,
-             false);
+    x = chip(x, s.start_active ? "START: ON" : "START: OFF",
+             s.start_active ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
   }
   if (s.debug_mode) {
     // Orange: stands out from the green/red status chips.
-    x = color_chip(x, "DEBUG: ON", cv::Scalar(0, 128, 255));
+    x = chip(x, "DEBUG: ON", cv::Scalar(0, 128, 255));
   }
   // Live recognition-gate state (START/DEBUG/no-serial → ON).
-  x = color_chip(x, s.recognition_active ? "REC: ON" : "REC: OFF",
-                 s.recognition_active ? cv::Scalar(0, 102, 0)
-                                      : cv::Scalar(0, 0, 170));
+  x = chip(x, s.recognition_active ? "REC: ON" : "REC: OFF",
+           s.recognition_active ? cv::Scalar(0, 102, 0)
+                                : cv::Scalar(0, 0, 170));
 
   // Inference fps (top-right).
   char fps_text[64];
