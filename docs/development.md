@@ -52,8 +52,10 @@ sudo ./build/crane_vision --backend bpu --web-port 8080
 # x86 全流程验证（mock 相机 + Web 校准 UI，无串口）
 ./build/crane_vision --mock-cameras --no-serial --web-port 8080
 # 浏览器打开 http://<host>:8080
-# 底部控制栏右侧 DEBUG 键：强制识别（绕过下位机 START），用于标定/调试；
-# 状态栏 REC:ON/OFF 实时显示识别门控是否打开。
+# 布局对齐 Python 参考：视频在上、控制区+滑块、底部独立状态栏。
+# DEBUG 键（控制区右侧，无串口时禁用）：强制识别（绕过下位机 START），标定/调试用；
+# REC:ON/OFF 显示识别门控。SETTINGS 视图隐藏视频并停掉 MJPEG，拖动滑块不卡。
+# 注：WSL2 localhost 每新建连接 ~200ms，服务器已用 HTTP keep-alive 缓解；板端局域网直连无此问题。
 
 # 静态图片单次扫描（无需相机/串口，端到端冒烟）
 ./build/crane_vision --once --bean-image tests/data/beans_2.jpg \

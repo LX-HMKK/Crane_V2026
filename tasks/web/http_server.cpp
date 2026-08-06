@@ -10,6 +10,7 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -149,6 +150,12 @@ void HttpServer::accept_loop() {
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
       continue;
     }
+    // Flush small responses immediately (Nagle + delayed ACK would otherwise
+    // stall them on the board's LAN too). NOTE: the ~200ms slider lag seen in
+    // WSL2 is the localhost NAT's per-CONNECTION cost, fixed by keep-alive in
+    // handle_connection() — TCP_NODELAY alone does not fix that case.
+    int one = 1;
+    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     {
       std::lock_guard<std::mutex> lock(conn_mutex_);
       conn_fds_.insert(fd);
@@ -196,7 +203,15 @@ void HttpServer::handle_connection(int fd) {
   // Any exception here would escape into a detached thread → std::terminate.
   // Malformed requests (bad content-length, ...) must just close quietly.
   try {
-    handle_request(fd);
+    // Keep-alive: serve multiple requests per connection. The WSL2 localhost
+    // path charges ~200ms per new TCP connection; reusing one connection turns
+    // slider/config POSTs from ~200ms into ~1ms. stop() shuts every fd down,
+    // so a thread blocked on recv() here returns as soon as running_ flips.
+    std::string buf;
+    bool keep_alive = true;
+    while (keep_alive && running_) {
+      keep_alive = handle_one_request(fd, buf);
+    }
   } catch (const std::exception& e) {
     LOG_WARN("http: request handling failed: %s", e.what());
   } catch (...) {
@@ -204,29 +219,27 @@ void HttpServer::handle_connection(int fd) {
   }
 }
 
-void HttpServer::handle_request(int fd) {
-  // Read the request (headers + optional body), 64 KiB cap.
-  std::string raw;
-  raw.reserve(4096);
-  char buf[4096];
+bool HttpServer::handle_one_request(int fd, std::string& buf) {
+  // Read until a full header block is buffered (partial reads persist across
+  // keep-alive iterations).
   size_t header_end = std::string::npos;
-  while (raw.size() < 65536) {
-    ssize_t n = ::recv(fd, buf, sizeof(buf), 0);
-    if (n <= 0) return;
-    raw.append(buf, static_cast<size_t>(n));
-    header_end = raw.find("\r\n\r\n");
-    if (header_end != std::string::npos) break;
+  while ((header_end = buf.find("\r\n\r\n")) == std::string::npos) {
+    if (buf.size() >= 65536) return false;  // oversize
+    char tmp[4096];
+    ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+    if (n <= 0) return false;  // EOF / error / fd shut down
+    buf.append(tmp, static_cast<size_t>(n));
   }
-  if (header_end == std::string::npos) return;
 
   Request req;
   // Request line
-  size_t line_end = raw.find("\r\n");
-  std::string request_line = raw.substr(0, line_end);
+  size_t line_end = buf.find("\r\n");
+  if (line_end == std::string::npos || line_end > header_end) return false;
+  std::string request_line = buf.substr(0, line_end);
   {
     size_t sp1 = request_line.find(' ');
     size_t sp2 = request_line.find(' ', sp1 + 1);
-    if (sp1 == std::string::npos || sp2 == std::string::npos) return;
+    if (sp1 == std::string::npos || sp2 == std::string::npos) return false;
     req.method = request_line.substr(0, sp1);
     std::string target = request_line.substr(sp1 + 1, sp2 - sp1 - 1);
     size_t q = target.find('?');
@@ -239,8 +252,8 @@ void HttpServer::handle_request(int fd) {
   // Headers
   size_t pos = line_end + 2;
   while (pos < header_end) {
-    size_t eol = raw.find("\r\n", pos);
-    std::string line = raw.substr(pos, eol - pos);
+    size_t eol = buf.find("\r\n", pos);
+    std::string line = buf.substr(pos, eol - pos);
     size_t colon = line.find(':');
     if (colon != std::string::npos) {
       std::string key = line.substr(0, colon);
@@ -251,26 +264,31 @@ void HttpServer::handle_request(int fd) {
     }
     pos = eol + 2;
   }
-  // Body (content-length)
+
+  // Body (content-length), consumed from the buffer.
+  size_t consumed = header_end + 4;
   auto it = req.headers.find("content-length");
   if (it != req.headers.end()) {
     size_t want = static_cast<size_t>(std::stoul(it->second));
-    size_t have = raw.size() - (header_end + 4);
-    while (have < want) {
-      ssize_t n = ::recv(fd, buf, std::min(sizeof(buf), want - have), 0);
-      if (n <= 0) break;
-      raw.append(buf, static_cast<size_t>(n));
-      have += static_cast<size_t>(n);
+    while (buf.size() < consumed + want) {
+      if (buf.size() >= 65536) return false;  // oversize
+      char tmp[4096];
+      ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+      if (n <= 0) return false;
+      buf.append(tmp, static_cast<size_t>(n));
     }
-    req.body = raw.substr(header_end + 4, want);
+    req.body = buf.substr(consumed, want);
+    consumed += want;
   }
+  // Drop the consumed request; keep any pipelined bytes for the next pass.
+  buf.erase(0, consumed);
 
   const std::string key = req.method + " " + req.path;
 
   auto sit = stream_handlers_.find(key);
   if (sit != stream_handlers_.end()) {
     sit->second(fd, req);  // handler streams until stop()/client disconnect
-    return;                // guard closes
+    return false;          // the stream owns this connection to completion
   }
 
   Response resp;
@@ -288,6 +306,17 @@ void HttpServer::handle_request(int fd) {
     resp.body = "not found";
   }
 
+  // Keep-alive unless the client asked to close. Browsers reuse the pooled
+  // connection, so only the first request per host pays connection setup.
+  bool client_close = false;
+  auto cit = req.headers.find("connection");
+  if (cit != req.headers.end()) {
+    std::string v = cit->second;
+    std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+    client_close = v.find("close") != std::string::npos;
+  }
+  bool keep_alive = !client_close && running_;
+
   static const std::map<int, std::string> kStatus = {
       {200, "200 OK"},
       {400, "400 Bad Request"},
@@ -296,16 +325,17 @@ void HttpServer::handle_request(int fd) {
       {500, "500 Internal Server Error"},
   };
   auto sit2 = kStatus.find(resp.status);
-  std::string head = "HTTP/1.0 " +
+  std::string head = std::string(keep_alive ? "HTTP/1.1 " : "HTTP/1.0 ") +
                      (sit2 != kStatus.end() ? sit2->second : "500") +
                      "\r\nContent-Type: " + resp.content_type +
                      "\r\nContent-Length: " + std::to_string(resp.body.size()) +
-                     "\r\nCache-Control: no-store\r\nConnection: close\r\n"
-                     "Access-Control-Allow-Origin: *\r\n\r\n";
+                     "\r\nCache-Control: no-store\r\nConnection: " +
+                     (keep_alive ? "keep-alive" : "close") +
+                     "\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
   send_all(fd, head.data(), head.size());
   if (!resp.body.empty()) send_all(fd, resp.body.data(), resp.body.size());
-  ::shutdown(fd, SHUT_RDWR);
-  return;  // guard closes
+  if (!keep_alive) ::shutdown(fd, SHUT_RDWR);
+  return keep_alive;
 }
 
 }  // namespace crane

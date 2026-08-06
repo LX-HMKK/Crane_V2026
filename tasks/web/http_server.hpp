@@ -55,7 +55,10 @@ class HttpServer {
  private:
   void accept_loop();
   void handle_connection(int fd);  // exception-safe wrapper
-  void handle_request(int fd);
+  // Read + dispatch one request from the connection buffer. Returns false when
+  // the connection must close (client Connection: close, stream route done,
+  // malformed request, read error, or server stopping).
+  bool handle_one_request(int fd, std::string& buf);
 
   std::string listen_addr_;
   int port_;

@@ -21,7 +21,8 @@ tasks/
     onnx_backend.*   # ONNX Runtime 后端（x86 验证）
     bpu_backend.*    # RDK X5 BPU 后端（板端）
     bpu_stub.c       # 非 RDK 主机的 libDNN 桩（保证全平台可编译链接）
-  web/               # 内嵌 HTTP server + MJPEG + REST + 全屏校准页 index.html
+  web/               # 内嵌 HTTP server(keep-alive) + MJPEG(降采样≤960宽) + REST
+                     # + 校准页 index.html（布局对齐 Python 参考：视频/控制/底部状态栏；settings 隐藏视频）
 ```
 
 include 根是 `tasks/`：跨模块引用写全路径（`"io/camera.hpp"`），同目录内写短名（`"mapping.hpp"`）。
@@ -55,7 +56,8 @@ include 根是 `tasks/`：跨模块引用写全路径（`"io/camera.hpp"`），�
                           连续 10 次生成失败才清空串口帧
       ↓ FramePayload
 串口线程                  200Hz poll_start()；START 活跃才 20Hz 发帧；掉线重连
-HTTP 连接线程             每连接一个线程；stop() 时 shutdown 全部 fd 并排空
+HTTP 连接线程             每连接一个线程；keep-alive 复用（WSL2 localhost 每新建连接 ~200ms，
+                          滑块 POST 卡顿主因，必须复用）；stop() 时 shutdown 全部 fd 并排空
 ```
 
 生命周期注意（都是审查修过的坑）：退出路径上所有 `std::thread` 必须 join（detached 线程 + 析构 = UAF）；跨线程共享的 `SerialPort` 用 `shared_ptr` + 互斥换指针；HTTP 连接线程入口必须套 try/catch（畸形请求抛异常 = terminate）。

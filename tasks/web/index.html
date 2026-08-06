@@ -16,8 +16,8 @@
   #app { display: flex; flex-direction: column; height: 100%; }
   #video-wrap { flex: 1; min-height: 0; background: #000; position: relative; }
   #video { width: 100%; height: 100%; object-fit: contain; display: block; }
-  #statusbar { position: absolute; top: 8px; left: 8px; display: flex;
-    gap: 6px; z-index: 2; }
+  #statusbar { background: var(--panel); padding: 8px 10px; display: flex;
+    gap: 6px; }
   .chip { padding: 4px 10px; border-radius: 4px; font-size: 13px;
     font-weight: 600; color: #fff; background: var(--gray); }
   .chip.ok { background: #060; }
@@ -39,6 +39,7 @@
   #exit { background: var(--red); }
   #debug { background: var(--gray); }
   #debug.active { background: #f80; }
+  #debug:disabled { opacity: .45; cursor: default; }
   .chip.warn { background: #f80; }
   #sliders { display: flex; flex-wrap: wrap; gap: 8px 22px; }
   .slider-row { display: flex; align-items: center; gap: 10px;
@@ -56,14 +57,6 @@
 <div id="app">
   <div id="video-wrap">
     <img id="video" alt="preview">
-    <div id="statusbar">
-      <span class="chip" id="st-bean">BEAN</span>
-      <span class="chip" id="st-digit">DIGIT</span>
-      <span class="chip" id="st-serial">SERIAL</span>
-      <span class="chip" id="st-start">START</span>
-      <span class="chip" id="st-debug">DEBUG</span>
-      <span class="chip" id="st-rec">REC</span>
-    </div>
     <div id="fps">—</div>
   </div>
   <div id="controls">
@@ -77,15 +70,23 @@
     </div>
     <div id="sliders"></div>
   </div>
+  <div id="statusbar">
+    <span class="chip" id="st-bean">BEAN</span>
+    <span class="chip" id="st-digit">DIGIT</span>
+    <span class="chip" id="st-serial">SERIAL</span>
+    <span class="chip" id="st-start">START</span>
+    <span class="chip" id="st-debug">DEBUG</span>
+    <span class="chip" id="st-rec">REC</span>
+  </div>
 </div>
 <script>
 (() => {
   let view = 'bean';
   let fields = [];
   const video = document.getElementById('video');
+  const videoWrap = document.getElementById('video-wrap');
   const slidersEl = document.getElementById('sliders');
   const debugBtn = document.getElementById('debug');
-  const stDebug = document.getElementById('st-debug');
 
   function setStream() {
     video.src = '/stream.mjpeg?cam=' + (view === 'digit' ? 'digit' : 'bean')
@@ -97,7 +98,16 @@
     for (const name of ['bean', 'digit', 'settings']) {
       document.getElementById('tab-' + name).classList.toggle('active', name === v);
     }
-    if (v !== 'settings') setStream();
+    if (v === 'settings') {
+      // Settings replaces the video preview entirely (reference layout): hide
+      // it and stop the MJPEG stream so slider dragging does not fight the
+      // browser for video-decode CPU.
+      videoWrap.style.display = 'none';
+      video.removeAttribute('src');
+    } else {
+      videoWrap.style.display = '';
+      setStream();
+    }
     renderSliders();
   }
 
@@ -165,12 +175,11 @@
       if (s.serial === 'na') {
         setChip('st-serial', 'SERIAL: N/A', 'na');
         // No serial backend -> recognition already always-on (nothing to gate
-        // on), so the DEBUG override is meaningless; hide it.
-        debugBtn.style.display = 'none';
-        stDebug.style.display = 'none';
+        // on), so the DEBUG override is meaningless; disable it (reference
+        // layout disables, it does not hide).
+        debugBtn.disabled = true;
       } else {
-        debugBtn.style.display = '';
-        stDebug.style.display = '';
+        debugBtn.disabled = false;
         setChip('st-serial', 'SERIAL: ' + (s.serial === 'ok' ? 'OK' : 'OFFLINE'), s.serial);
       }
       setChip('st-start', 'START: ' + (s.start ? 'ON' : 'OFF'), s.start ? 'ok' : 'off');
@@ -191,6 +200,7 @@
 
   function setDebug(on) {
     debugBtn.classList.toggle('active', !!on);
+    debugBtn.textContent = on ? 'DEBUG ON' : 'DEBUG';
   }
 
   document.getElementById('tab-bean').onclick = () => setView('bean');

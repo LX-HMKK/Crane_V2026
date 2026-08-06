@@ -19,6 +19,11 @@ namespace crane {
 
 namespace {
 
+// MJPEG frames are downscaled before JPEG encode: the browser scales them to
+// fit the screen anyway (object-fit: contain), so sending full 1280px JPEGs
+// only wastes encode CPU and decode jank on every slider drag.
+constexpr int kMjpegMaxWidth = 960;
+
 std::string json_escape(const std::string& s) {
   std::string out;
   out.reserve(s.size() + 8);
@@ -300,8 +305,15 @@ void WebUi::handle_mjpeg(int fd, const HttpServer::Request& req) {
       continue;
     }
     std::vector<uint8_t> jpg;
+    cv::Mat frame_out = view;
+    if (view.cols > kMjpegMaxWidth) {
+      double scale = static_cast<double>(kMjpegMaxWidth) / view.cols;
+      cv::resize(view, frame_out,
+                 cv::Size(kMjpegMaxWidth, static_cast<int>(view.rows * scale)),
+                 0, 0, cv::INTER_AREA);
+    }
     try {
-      cv::imencode(".jpg", view, jpg, params);
+      cv::imencode(".jpg", frame_out, jpg, params);
     } catch (const cv::Exception&) {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;

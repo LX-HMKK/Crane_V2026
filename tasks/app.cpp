@@ -751,58 +751,9 @@ bool CompetitionApp::render_view(Channel ch, cv::Mat& out) {
                 {0, 140, 255}, 2);
   }
 
-  // Status bar (bottom-left): BEAN / DIGIT / SERIAL / START.
-  Status s = status();
-  // Status chip: draws a filled label and returns the next x. Callers pick
-  // the background color (green ok / red err / gray na / orange debug).
-  auto chip = [&](int x, const std::string& text, const cv::Scalar& bg) {
-    int baseline = 0;
-    cv::Size ts =
-        cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
-    int y = frame.rows - 10;
-    cv::rectangle(frame, {x, y - ts.height - 8}, {x + ts.width + 12, y + 4},
-                  bg, cv::FILLED);
-    cv::putText(frame, text, {x + 6, y - 4}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
-                {255, 255, 255}, 1);
-    return x + ts.width + 20;
-  };
-  int x = 8;
-  x = chip(x, s.bean_online ? "BEAN: OK" : "BEAN: OFFLINE",
-           s.bean_online ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
-  x = chip(x, s.digit_online ? "DIGIT: OK" : "DIGIT: OFFLINE",
-           s.digit_online ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
-  x = chip(x,
-           !s.serial_present
-               ? "SERIAL: N/A"
-               : (s.serial_connected ? "SERIAL: OK" : "SERIAL: OFFLINE"),
-           !s.serial_present
-               ? cv::Scalar(102, 102, 102)
-               : (s.serial_connected ? cv::Scalar(0, 102, 0)
-                                     : cv::Scalar(0, 0, 170)));
-  if (s.serial_present) {
-    x = chip(x, s.start_active ? "START: ON" : "START: OFF",
-             s.start_active ? cv::Scalar(0, 102, 0) : cv::Scalar(0, 0, 170));
-  }
-  if (s.debug_mode) {
-    // Orange: stands out from the green/red status chips.
-    x = chip(x, "DEBUG: ON", cv::Scalar(0, 128, 255));
-  }
-  // Live recognition-gate state (START/DEBUG/no-serial → ON).
-  x = chip(x, s.recognition_active ? "REC: ON" : "REC: OFF",
-           s.recognition_active ? cv::Scalar(0, 102, 0)
-                                : cv::Scalar(0, 0, 170));
-
-  // Inference fps (top-right).
-  char fps_text[64];
-  std::snprintf(fps_text, sizeof(fps_text), "bean %.1f fps | digit %.1f fps",
-                s.bean_infer_fps, s.digit_infer_fps);
-  int baseline = 0;
-  cv::Size fts =
-      cv::getTextSize(fps_text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseline);
-  cv::putText(frame, fps_text,
-              {frame.cols - fts.width - 8, fts.height + 8},
-              cv::FONT_HERSHEY_SIMPLEX, 0.5, {200, 200, 200}, 1);
-
+  // Status / fps are rendered by the HTML bottom status bar (index.html),
+  // matching the reference Tkinter layout; the video frame carries only the
+  // calibration overlay (guide lines, detections, inferred-zone labels).
   out = std::move(frame);
   return true;
 }
