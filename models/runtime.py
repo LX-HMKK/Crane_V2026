@@ -203,6 +203,36 @@ def scan_once(bean_cam, digit_cam, bean_model, digit_model, task_gen, cfg):
     return task_gen.generate(bean_dets, digit_dets)
 
 
+def inference_gate_open(cfg, start_active, force=False):
+    """Whether START-gated inference should run (shared by UI and headless).
+
+    The gate is open (returns True) when the config disables it
+    (inference.start_gated=false), a DEBUG/force flag is set, or the serial
+    START heartbeat is active. ``start_active`` may be a bool or a callable;
+    a missing/None value counts as open so x86 (no serial) and minimal test
+    stubs keep inferring.
+    """
+    if not cfg.get("inference", {}).get("start_gated", True):
+        return True
+    if force:
+        return True
+    if start_active is None:
+        return True
+    return bool(start_active() if callable(start_active) else start_active)
+
+
+def serial_start_active(serial):
+    """True when a serial object reports an active START heartbeat.
+
+    Handles both a bool attribute and a callable (test stubs / future
+    implementations). A missing attribute is treated as active so minimal
+    test stubs preserve their prior behavior; production SerialThread always
+    exposes the property.
+    """
+    active = getattr(serial, "is_start_active", True)
+    return bool(active() if callable(active) else active)
+
+
 def release_cameras(*cameras):
     """Release all non-None cameras."""
     for cam in cameras:

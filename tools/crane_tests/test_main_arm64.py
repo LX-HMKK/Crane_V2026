@@ -216,7 +216,8 @@ def _serial_stub(current_frame=None, is_start_active=True):
 
 
 def test_headless_idles_without_start(monkeypatch):
-    """With START inactive the headless loop must not scan or touch state."""
+    """With START inactive the headless loop must not scan, and must clear
+    any stale serial frame so it is not transmitted on START resume."""
     import scripts.main_arm64 as main_arm64
 
     scan_calls = []
@@ -241,7 +242,7 @@ def test_headless_idles_without_start(monkeypatch):
     loop.run(handoff_ready=handoff_ready)
 
     assert scan_calls == []
-    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    assert serial.current_frame is None
     assert loop.consecutive_failures == 0
 
 
@@ -268,7 +269,7 @@ def test_headless_scans_when_start_active(monkeypatch):
 
 
 def test_headless_idle_does_not_count_as_failures(monkeypatch):
-    """Idle ticks must not inflate consecutive_failures or clear the frame."""
+    """Idle ticks must not run scans, and must reset stale failure state."""
     import scripts.main_arm64 as main_arm64
 
     scan_calls = []
@@ -293,9 +294,49 @@ def test_headless_idle_does_not_count_as_failures(monkeypatch):
 
     loop.run(handoff_ready=handoff_ready)
 
-    assert loop.consecutive_failures == 5
-    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    assert loop.consecutive_failures == 0
+    assert serial.current_frame is None
     assert scan_calls == []
+
+
+def test_headless_gate_off_clears_stale_frame_before_resume(monkeypatch):
+    """A frame published before START dropped must be cleared while idle, so
+    it is never transmitted when START resumes (F1)."""
+    import scripts.main_arm64 as main_arm64
+
+    monkeypatch.setattr(
+        main_arm64,
+        "scan_once_dets",
+        lambda *_a, **_k: (["bean"], ["digit"], "ok"),
+    )
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    class FlippingSerial:
+        current_frame = (1, 2, 3, 4, 5, 1, 2, 3)
+
+        def __init__(self):
+            self.active = True
+
+        @property
+        def is_start_active(self):
+            return self.active
+
+    serial = FlippingSerial()
+    task_gen = _TaskGenerator()
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), task_gen, serial, 0.0
+    )
+
+    # START active: one scan publishes the frame to the serial cache.
+    loop._scan_once()
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+
+    # START drops: the idle branch must clear the stale cache before resume.
+    serial.active = False
+    checks = iter((False, True))
+    loop.run(handoff_ready=lambda: next(checks))
+
+    assert serial.current_frame is None
 
 
 def test_headless_handoff_during_idle_returns_promptly(monkeypatch):
@@ -321,7 +362,8 @@ def test_headless_handoff_during_idle_returns_promptly(monkeypatch):
 
 
 def test_headless_debug_force_overrides_inactive_start(monkeypatch):
-    """debug_force_inference bypasses an inactive START (field debugging)."""
+    """debug_force_inference bypasses an inactive START and runs inference,
+    but stays display-only: it never writes the serial cache (F4)."""
     import scripts.main_arm64 as main_arm64
 
     monkeypatch.setattr(
@@ -339,7 +381,9 @@ def test_headless_debug_force_overrides_inactive_start(monkeypatch):
     loop.debug_force_inference = True
     loop.run(handoff_ready=lambda: True)
 
-    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    # Inference ran (task_gen called) but the serial cache stayed empty.
+    assert len(task_gen.calls) == 1
+    assert serial.current_frame is None
 
 
 def test_headless_start_gated_false_scans_without_start(monkeypatch):

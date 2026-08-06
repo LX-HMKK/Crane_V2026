@@ -11,6 +11,7 @@ from PIL import Image, ImageTk
 
 from models.camera_viewer import CameraViewer, LINE_COLORS
 from models.config_binding import ConfigBinding
+from models.runtime import inference_gate_open, serial_start_active
 
 SLIDER_DEFS = {
     "bean": [
@@ -308,6 +309,13 @@ class CalibrationUI(CameraViewer):
             # worker stays blocked and warm until the gate reopens.
             self._on_inference_gate_closed()
             return
+        if getattr(self, "serial", None) is not None and not serial_start_active(
+            self.serial
+        ):
+            # Inference is running on DEBUG alone (START inactive). DEBUG is
+            # display-only: keep the serial cache empty so a pre-gap frame is
+            # never transmitted when START resumes (F2).
+            self._clear_serial_cache()
         model = self.bean_model if mode == "bean" else self.digit_model
         if model is None:
             return
@@ -976,16 +984,13 @@ class CompetitionUI(CalibrationUI):
         a config that disables the gate always infer, so development/testing
         workflows are unchanged.
         """
-        if not self.cfg.get("inference", {}).get("start_gated", True):
-            return True
         if self.serial is None:
             return True
-        if self._debug_force_inference:
-            return True
-        active = getattr(self.serial, "is_start_active", None)
-        if active is None:
-            return True
-        return bool(active() if callable(active) else active)
+        return inference_gate_open(
+            self.cfg,
+            getattr(self.serial, "is_start_active", None),
+            force=self._debug_force_inference,
+        )
 
     def _debug_forced(self):
         """True when inference runs purely because DEBUG forces it (no START).
@@ -997,17 +1002,15 @@ class CompetitionUI(CalibrationUI):
             return False
         if self.serial is None:
             return False
-        return self._debug_force_inference and not bool(
-            getattr(self.serial, "is_start_active", False)
-        )
+        return self._debug_force_inference and not serial_start_active(self.serial)
 
-    def _on_inference_gate_closed(self):
-        """Reset inference/display/serial state for a gate-off (idle) period.
+    def _clear_serial_cache(self):
+        """Drop serial/result state (idempotent; returns True if changed).
 
-        Called from the capture-worker submit path whenever the gate is
-        observed closed. Idempotent under duplicate/concurrent invocation
-        (both camera workers hit it each capture tick). Lock order matches
-        _on_inference_done: _task_lock -> _result_lock -> _infer_pending_cv.
+        Keeps the serial cache empty while START is inactive so a pre-gap
+        frame is never transmitted when START resumes. Also called from the
+        DEBUG path: DEBUG results are display-only and must not linger in the
+        cache.
         """
         dirty = False
         with self._task_lock:
@@ -1023,6 +1026,18 @@ class CompetitionUI(CalibrationUI):
             if self.serial is not None and self.serial.current_frame is not None:
                 self.serial.current_frame = None
                 dirty = True
+        return dirty
+
+    def _on_inference_gate_closed(self):
+        """Reset inference/display/serial state for a gate-off (idle) period.
+
+        Called from the capture-worker submit path whenever the inference
+        gate is observed closed. Idempotent under duplicate/concurrent
+        invocation (both camera workers hit it each capture tick). Lock order
+        matches _on_inference_done: _task_lock -> _result_lock ->
+        _infer_pending_cv.
+        """
+        dirty = self._clear_serial_cache()
         with self._result_lock:
             if (
                 self._latest_dets["bean"] is not None
@@ -1252,9 +1267,7 @@ class CompetitionUI(CalibrationUI):
             if self.serial is None:
                 self._set_status("start", None)
             else:
-                self._set_status(
-                    "start", bool(getattr(self.serial, "is_start_active", False))
-                )
+                self._set_status("start", serial_start_active(self.serial))
         except Exception:
             logging.exception("Failed to refresh status bar")
 

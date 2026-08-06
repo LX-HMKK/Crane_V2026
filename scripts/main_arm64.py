@@ -25,12 +25,14 @@ sys.path.insert(0, str(ROOT))
 from models.runtime import (
     ROOT as RUNTIME_ROOT,
     create_task_generator,
+    inference_gate_open,
     init_logging,
     load_models,
     load_vision_cfg,
     open_camera,
     release_cameras,
     scan_once_dets,
+    serial_start_active,
     warmup_models,
 )
 from models.serial_port import SerialThread
@@ -132,22 +134,43 @@ class HeadlessCompetitionLoop:
 
         Competition rules gate recognition on the lower machine's START
         heartbeat. The gate can be bypassed by config (inference.start_gated
-        disabled) or by the DEBUG override, and is lenient when the serial
-        stub/thread lacks the is_start_active attribute so tests and dev
-        runs keep scanning.
+        disabled) or by the DEBUG override.
+        """
+        return inference_gate_open(
+            self.cfg,
+            getattr(self.serial, "is_start_active", None),
+            force=self.debug_force_inference,
+        )
+
+    def _debug_forced(self):
+        """True when inference runs purely because debug_force forces it with
+        START inactive. Results must stay out of the serial cache (headless
+        equivalent of the UI DEBUG button's display-only behavior).
         """
         if not self.cfg.get("inference", {}).get("start_gated", True):
-            return True
-        if self.debug_force_inference:
-            return True
-        active = getattr(self.serial, "is_start_active", None)
-        if active is None:
-            return True
-        return bool(active() if callable(active) else active)
+            return False
+        return self.debug_force_inference and not serial_start_active(self.serial)
+
+    def _clear_serial_cache(self):
+        """Keep the serial cache empty while START is inactive so a pre-gap
+        frame is never transmitted when START resumes. DEBUG-forced results
+        are display-only and must not linger in the cache either.
+        """
+        if self.last_frame is not None:
+            self.last_frame = None
+        if self.consecutive_failures != 0:
+            self.consecutive_failures = 0
+        if self.serial is not None and self.serial.current_frame is not None:
+            self.serial.current_frame = None
 
     def run(self, handoff_ready=None):
         """Run until a handoff callback returns true, or forever when omitted."""
         while True:
+            if not serial_start_active(self.serial):
+                # START inactive: keep the serial cache empty so a pre-gap
+                # frame is never transmitted when START resumes. DEBUG-forced
+                # inference may still run below but stays display-only.
+                self._clear_serial_cache()
             if not self.inference_enabled():
                 # No START yet: keep the models warm and poll without running
                 # inference. Idle must never count toward failure counters,
@@ -185,6 +208,8 @@ class HeadlessCompetitionLoop:
             # the stale frame again.
             return True
 
+        debug_forced = self._debug_forced()
+
         if capture_reason == "ok":
             frame, reason = build_completed_result(
                 self.task_gen, bean_dets, digit_dets, self.cfg
@@ -193,20 +218,31 @@ class HeadlessCompetitionLoop:
             frame, reason = None, capture_reason
 
         if frame is not None:
-            self.consecutive_failures = 0
-            self.serial.current_frame = frame
-            if self.first_result_at is None:
-                self.first_result_at = time.monotonic()
-                logging.info(
-                    "Startup: first valid result ready at %.2fs",
-                    self.first_result_at - self.started_at,
+            if not debug_forced:
+                self.consecutive_failures = 0
+                self.serial.current_frame = frame
+                if self.first_result_at is None:
+                    self.first_result_at = time.monotonic()
+                    logging.info(
+                        "Startup: first valid result ready at %.2fs",
+                        self.first_result_at - self.started_at,
+                    )
+                if frame != self.last_frame:
+                    logging.info(
+                        "Result updated: C1-C3=%s, N4-N8=%s",
+                        frame[:3], frame[3:],
+                    )
+                    self.last_frame = frame
+            else:
+                # DEBUG is display-only in headless too: never write the
+                # serial cache or the failure counters.
+                logging.debug(
+                    "DEBUG inference: C1-C3=%s, N4-N8=%s", frame[:3], frame[3:],
                 )
-            if frame != self.last_frame:
-                logging.info(
-                    "Result updated: C1-C3=%s, N4-N8=%s",
-                    frame[:3], frame[3:],
-                )
-                self.last_frame = frame
+            return False
+
+        if debug_forced:
+            logging.warning("DEBUG inference produced no result: %s", reason)
             return False
 
         self.consecutive_failures += 1

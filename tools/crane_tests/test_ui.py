@@ -1365,3 +1365,38 @@ def test_competition_idle_update_frame_suppresses_overlay(tmp_path, monkeypatch)
 
     assert draw_calls == []
     assert shown == [frame]
+
+
+def test_competition_debug_on_drops_serial_cache(tmp_path):
+    """DEBUG on with START inactive must keep the serial cache empty (F2),
+    so a pre-gap frame is never transmitted when START resumes."""
+    cfg_path = _write_cfg(tmp_path)
+    serial = _serial_with_start(False)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    serial.current_frame = (1, 2, 3, 4, 5, 1, 2, 3)
+    ui._debug_force_inference = True
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    ui._submit_frame_for_inference("bean", frame)
+
+    assert serial.current_frame is None
+
+
+def test_competition_debug_forced_is_start_active_callable(tmp_path):
+    """_debug_forced() must handle a callable is_start_active like
+    _should_infer() does (F3); otherwise DEBUG results would be treated as
+    normal and written to the serial cache."""
+    cfg_path = _write_cfg(tmp_path)
+    serial = MagicMock()
+    serial.is_start_active = lambda: False
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    ui._debug_force_inference = True
+
+    assert ui._should_infer() is True
+    assert ui._debug_forced() is True
