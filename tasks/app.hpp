@@ -110,7 +110,9 @@ class CompetitionApp {
   void submit_frame_for_inference(Channel ch, const cv::Mat& frame);
   bool camera_capture_healthy(Channel ch) const;
   // Recognition gate: frames are fed to the model only while the MCU keeps
-  // START alive (or while DEBUG is forced, or when no serial backend exists).
+  // START alive, or while DEBUG is forced. Without a serial backend
+  // (--no-serial / serial-open failure) recognition gates OFF — the board
+  // would be idle — and DEBUG is the only way to force it on.
   bool recognition_enabled() const;
   void invalidate_camera_detections(Channel ch);
   void on_inference_done(Channel ch);

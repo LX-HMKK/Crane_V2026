@@ -481,19 +481,18 @@ void CompetitionApp::stop() {
 
 bool CompetitionApp::recognition_enabled() const {
   if (debug_mode_.load(std::memory_order_relaxed)) return true;
-  // No usable serial backend (--no-serial dev mode, a port that failed to
-  // open at boot, or one sitting in a failed/reopening state): there is no
-  // START to gate on, so recognition always runs. This keeps
-  // `--mock-cameras --no-serial` a usable development loop and makes the
-  // boot-time and runtime serial failure modes behave identically (fail-open).
-  // A live port gates recognition on START; a healthy-but-quiet port means no
-  // recognition. TX stays separately START-gated, so nothing transmits while
-  // the MCU is not signalling.
-  if (!serial_ || !serial_->connected()) return true;
+  // No usable serial backend (--no-serial dev mode, or a port that failed to
+  // open at boot — e.g. the Windows dev-verification stub which always
+  // throws): there is no MCU to signal START, so recognition stays OFF. This
+  // is the board-idle state; it also stops a Windows dev run from pinning both
+  // inference workers at 100% CPU during UI calibration. Use the DEBUG toggle
+  // to force recognition for calibration/verification.
+  if (!serial_ || !serial_->connected()) return false;
   // The serial RX loop is in its 1s error-backoff pause: it cannot read START
   // during that window, so a strict START check would freeze perception. Fail
-  // open while the RX loop is unhealthy, consistent with the no-serial /
-  // disconnected cases.
+  // open only while the loop is unhealthy (a live port that is erroring), so a
+  // transient UART blip does not kill a running round. TX stays separately
+  // START-gated, so nothing transmits while the MCU is not signalling.
   if (!serial_->rx_healthy()) return true;
   return serial_->is_start_active();
 }

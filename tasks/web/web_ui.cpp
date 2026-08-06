@@ -38,19 +38,6 @@ std::string json_escape(const std::string& s) {
   return out;
 }
 
-bool send_all(net::Socket fd, const char* data, size_t n) {
-  size_t sent = 0;
-  while (sent < n) {
-    net::ssize_t rc = net::send(fd, data + sent, n - sent, net::kMsgNoSignal);
-    if (rc < 0) {
-      if (errno == EINTR) continue;
-      return false;
-    }
-    sent += static_cast<size_t>(rc);
-  }
-  return true;
-}
-
 // Editable field descriptor shared by GET /api/config and POST handling.
 struct Field {
   std::string key;     // dotted path, e.g. "lines.bean.left_x"
@@ -295,7 +282,7 @@ void WebUi::handle_mjpeg(net::Socket fd, const HttpServer::Request& req) {
       "HTTP/1.0 200 OK\r\n"
       "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n"
       "Cache-Control: no-store\r\nConnection: close\r\n\r\n";
-  if (!send_all(fd, head.data(), head.size())) return;
+  if (!net::send_all(fd, head.data(), head.size())) return;
 
   std::vector<int> params = {cv::IMWRITE_JPEG_QUALITY, 80};
   while (server_.server_running()) {
@@ -321,10 +308,11 @@ void WebUi::handle_mjpeg(net::Socket fd, const HttpServer::Request& req) {
     std::string chunk_head = "--frame\r\nContent-Type: image/jpeg\r\n"
                              "Content-Length: " +
                              std::to_string(jpg.size()) + "\r\n\r\n";
-    if (!send_all(fd, chunk_head.data(), chunk_head.size())) return;
-    if (!send_all(fd, reinterpret_cast<const char*>(jpg.data()), jpg.size()))
+    if (!net::send_all(fd, chunk_head.data(), chunk_head.size())) return;
+    if (!net::send_all(fd, reinterpret_cast<const char*>(jpg.data()),
+                       jpg.size()))
       return;
-    if (!send_all(fd, "\r\n", 2)) return;
+    if (!net::send_all(fd, "\r\n", 2)) return;
     std::this_thread::sleep_for(std::chrono::milliseconds(80));  // ~12 fps
   }
 }

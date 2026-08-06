@@ -12,6 +12,11 @@
 
 namespace crane {
 
+// Upper bound on any single blocking send() on a client connection. A stalled
+// viewer holds a per-connection thread only until the send times out, then
+// the connection is closed and the thread freed.
+constexpr int kConnSendTimeoutSec = 5;
+
 std::string url_decode(const std::string& s) {
   std::string out;
   out.reserve(s.size());
@@ -154,6 +159,15 @@ void HttpServer::accept_loop() {
     // handle_connection() — TCP_NODELAY alone does not fix that case.
     int one = 1;
     net::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    // Bound blocking sends: a client that stops reading (background-tab MJPEG
+    // throttle, network partition, lid close) fills the TCP send buffer, and a
+    // blocking send() would otherwise hold this per-connection thread forever.
+    // SO_SNDTIMEO turns that into a bounded EAGAIN/ETIMEDOUT so send_all()
+    // fails, the stream/response handler returns, and the thread is freed.
+    // RCVTIMEO is deliberately NOT set: an idle keep-alive connection must be
+    // free to block in recv() indefinitely, or WSL2 slider POSTs would pay the
+    // ~200ms new-connection penalty again on every keep-alive expiry.
+    net::set_send_timeout(fd, kConnSendTimeoutSec);
     {
       std::lock_guard<std::mutex> lock(conn_mutex_);
       conn_fds_.insert(fd);
@@ -162,23 +176,6 @@ void HttpServer::accept_loop() {
     std::thread(&HttpServer::handle_connection, this, fd).detach();
   }
 }
-
-namespace {
-
-bool send_all(net::Socket fd, const char* data, size_t n) {
-  size_t sent = 0;
-  while (sent < n) {
-    net::ssize_t rc = net::send(fd, data + sent, n - sent, net::kMsgNoSignal);
-    if (rc < 0) {
-      if (errno == EINTR) continue;
-      return false;
-    }
-    sent += static_cast<size_t>(rc);
-  }
-  return true;
-}
-
-}  // namespace
 
 void HttpServer::handle_connection(net::Socket fd) {
   // RAII: always deregister on exit so stop() can drain cleanly. The guard
@@ -330,8 +327,14 @@ bool HttpServer::handle_one_request(net::Socket fd, std::string& buf) {
                      "\r\nCache-Control: no-store\r\nConnection: " +
                      (keep_alive ? "keep-alive" : "close") +
                      "\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
-  send_all(fd, head.data(), head.size());
-  if (!resp.body.empty()) send_all(fd, resp.body.data(), resp.body.size());
+  // A send that fails (e.g. the client stopped reading and SO_SNDTIMEO
+  // expired) must close the connection: otherwise the keep-alive loop would
+  // block in recv() holding a thread for a client that can no longer receive.
+  if (!net::send_all(fd, head.data(), head.size())) return false;
+  if (!resp.body.empty() &&
+      !net::send_all(fd, resp.body.data(), resp.body.size())) {
+    return false;
+  }
   if (!keep_alive) net::shutdown(fd, net::kShutRdwr);
   return keep_alive;
 }

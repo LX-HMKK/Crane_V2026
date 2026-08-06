@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -31,7 +32,10 @@ class Logger {
   void set_log_dir(const std::string& dir) {
     std::lock_guard<std::mutex> lock(mutex_);
     log_dir_ = dir.empty() ? "logs" : dir;
-    close_file_locked();  // next log() re-opens under the new dir
+    close_file_locked();            // next log() re-opens under the new dir
+    last_open_attempt_ = 0.0;       // clear the failure backoff so the new dir
+    open_failure_reported_ = false; // ...and gets its own one-line notice if
+                                    // it too cannot be opened
   }
 
   void log(Level level, const char* fmt, ...) {
@@ -57,7 +61,16 @@ class Logger {
       std::fprintf(out, "%s [%s] ", time_buf, kNames[level]);
       std::vfprintf(out, fmt, file_args);
       std::fputc('\n', out);
-      std::fflush(out);
+      // Flush the daily file on an interval (and always for ERROR) instead of
+      // every line: the file is a diagnostic mirror, so a per-line fflush is
+      // a disk write per log line (2 flush syscalls/line counting stdout) and
+      // amplifies flash wear on the RDK. stdio buffers the rest; worst-case
+      // ~0.25s of lines are lost on a hard crash, which is acceptable.
+      double mnow = now_sec();
+      if (level >= kError || mnow - last_file_flush_ >= kFileFlushIntervalSec) {
+        std::fflush(out);
+        last_file_flush_ = mnow;
+      }
     }
     va_end(file_args);
 
@@ -67,14 +80,31 @@ class Logger {
     std::vfprintf(stdout, fmt, out_args);
     va_end(out_args);
     std::fputc('\n', stdout);
-    std::fflush(stdout);
+    std::fflush(stdout);  // keep console latency low during interactive dev
   }
 
  private:
+  static constexpr double kReopenRetryIntervalSec = 5.0;
+  static constexpr double kFileFlushIntervalSec = 0.25;
+
+  static double now_sec() {
+    return std::chrono::duration<double>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+  }
+
   // Re-open the daily file if the day changed or it is not open yet. Returns
   // nullptr when file logging is unavailable (log() then stays console-only).
+  // After a failed open, retries are rate-limited to kReopenRetryIntervalSec:
+  // an unwritable log dir would otherwise re-run create_directories()+fopen()
+  // on every log line under the global mutex (O(n) failed syscalls + stderr
+  // spam during high-frequency error bursts).
   FILE* ensure_file_locked(const char* date_buf) {
     if (file_ && std::strcmp(date_buf, file_date_) == 0) return file_;
+    if (!file_ && now_sec() - last_open_attempt_ < kReopenRetryIntervalSec) {
+      return nullptr;
+    }
+    last_open_attempt_ = now_sec();
     close_file_locked();
     std::error_code ec;
     std::filesystem::create_directories(log_dir_, ec);
@@ -83,17 +113,21 @@ class Logger {
         ("crane_" + std::string(date_buf) + ".log");
     file_ = std::fopen(p.string().c_str(), "a");
     if (!file_) {
-      std::fprintf(stderr, "[logger] cannot open %s\n", p.string().c_str());
-      std::fflush(stderr);
+      if (!open_failure_reported_) {
+        std::fprintf(stderr, "[logger] cannot open %s\n", p.string().c_str());
+        std::fflush(stderr);
+        open_failure_reported_ = true;
+      }
       return nullptr;
     }
+    open_failure_reported_ = false;
     std::snprintf(file_date_, sizeof(file_date_), "%s", date_buf);
     return file_;
   }
 
   void close_file_locked() {
     if (file_) {
-      std::fclose(file_);
+      std::fclose(file_);  // flushes any buffered lines
       file_ = nullptr;
     }
     file_date_[0] = '\0';
@@ -103,6 +137,12 @@ class Logger {
   FILE* file_ = nullptr;
   char file_date_[16] = {0};
   Level level_ = kInfo;
+  // Starts below the retry threshold so the very first log line always tries
+  // to open the file (a process started < 5s after boot would otherwise be
+  // gated until uptime passes 5s). monotonic; rate-limits failed reopens.
+  double last_open_attempt_ = -kReopenRetryIntervalSec;
+  bool open_failure_reported_ = false;
+  double last_file_flush_ = 0.0;     // monotonic; interval-flush the file
   std::mutex mutex_;
 };
 

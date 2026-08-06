@@ -12,6 +12,9 @@ verifies the recognition gate end to end:
       START, stays sticky after START drops, and the encoded 12-byte frame is
       actually transmitted over the (pty) serial link. Serial frame encoding /
       START-parsing itself is covered by the C++ test_serial unit test.
+  Run C (--no-serial): with no serial backend recognition gates OFF (board-
+      idle, so a Windows dev run does not pin 100% CPU), and DEBUG is the only
+      way to force it on.
 
 Usage (inside the WSL build env):  python3 tests/test_start_gate.py
 """
@@ -254,9 +257,57 @@ def run_b():
         teardown(master, app, logf)
 
 
+def run_c():
+    print("== Run C: --no-serial — gate closed by default, DEBUG forces ==")
+    master, app, logf = launched(["--mock-cameras", "--no-serial"])
+    try:
+        time.sleep(1.0)
+        s = http("/api/status")
+        check("C.no-serial serial na", s["serial"] == "na", s)
+        check("C.no-serial gate closed", s["recognition"] is False, s)
+        base = task_lines()
+        time.sleep(1.5)
+        # With no serial, recognition must stay OFF (board-idle, not the
+        # fail-open that pins a Windows dev run at 100% CPU). If the gate were
+        # open, mock scenes would be logic-rejected and task lines would grow.
+        check("C.no-serial no task activity (idle)",
+              task_lines() == base, "base=%d now=%d" % (base, task_lines()))
+
+        # DEBUG is the only way to force recognition without a serial backend.
+        post("/api/debug?mode=1")
+        time.sleep(0.5)
+        s = http("/api/status")
+        check("C.DEBUG-on gate forced open", s["recognition"] is True, s)
+        check("C.DEBUG-on start still off", s["start"] is False, s)
+        # Same 6s window as Run A: the mock-scene failure counter exhausts its
+        # 10 warning lines quickly, then "No valid result" re-fires only every
+        # 5s (kResultFailureLogIntervalSec) — a shorter window can land in a
+        # silent gap and fail spuriously.
+        dbg_base = task_lines()
+        time.sleep(6.0)
+        check("C.DEBUG-on inference ran (task activity)",
+              task_lines() > dbg_base,
+              "base=%d now=%d" % (dbg_base, task_lines()))
+
+        post("/api/debug?mode=0")
+        # Drain in-flight predicts first: a predict already past the consume
+        # gate publishes after the gate closes (no publish-side gate), so its
+        # line must land before the baseline is read.
+        time.sleep(1.5)
+        s = http("/api/status")
+        check("C.DEBUG-off gate closed", s["recognition"] is False, s)
+        off_base = task_lines()
+        time.sleep(1.5)
+        check("C.DEBUG-off no new task activity", task_lines() == off_base,
+              "base=%d now=%d" % (off_base, task_lines()))
+    finally:
+        teardown(master, app, logf)
+
+
 def main():
     run_a()
     run_b()
+    run_c()
     print("\n--- app log tail ---")
     print(read_log()[-1200:])
     if failures:

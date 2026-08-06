@@ -56,7 +56,9 @@ sudo ./build/crane_vision --backend bpu --web-port 8080
 ./build/crane_vision --mock-cameras --no-serial --web-port 8080
 # 浏览器打开 http://<host>:8080
 # 布局对齐 Python 参考：视频在上、控制区+滑块、底部独立状态栏。
-# DEBUG 键（控制区右侧，无串口时禁用）：强制识别（绕过下位机 START），标定/调试用；
+# DEBUG 键（控制区右侧）：强制识别（绕过下位机 START），标定/调试用。无串口时
+# 识别默认关断（板端 idle，避免标定期间双路推理钉 100% CPU），DEBUG 是唯一开启
+# 途径——该键在无串口时保持可用（不再禁用）。
 # REC:ON/OFF 显示识别门控。SETTINGS 视图隐藏视频并停掉 MJPEG，拖动滑块不卡。
 # 注：WSL2 localhost 每新建连接 ~200ms，服务器已用 HTTP keep-alive 缓解；板端局域网直连无此问题。
 
@@ -93,6 +95,8 @@ bash scripts/wsl_run.sh <cmd>           # WSL 内跑二进制：cd 项目根 + �
 ## Windows 原生构建（开发验证）
 
 本机 Windows 编译消除 WSL2 损耗（推理 ~29ms vs WSL2 ~35ms，且无 localhost 每连接 200ms）。**仅开发验证**：mock 相机 + 无串口 + ONNX + Web UI；真实 V4L2 相机 / COM 串口 / BPU 只在 RDK X5 上有。
+
+无串口时识别门控默认**关闭**（fail-closed）：Windows 串口 stub 必抛 → `serial_=nullptr` → 标定 UI 期间双路推理不再满速，进程不再钉 100% CPU。要看检测框在 UI 里点 DEBUG 强制识别。HTTP/MJPEG 连接在 accept 时设 5s `SO_SNDTIMEO`：客户端停读（后台标签节流/合盖）最多占用该连接线程 5s 即关闭。
 
 ```powershell
 # 依赖：ORT win zip → tools/onnxruntime-win、OpenCV 4.12 预编译 → tools/opencv、

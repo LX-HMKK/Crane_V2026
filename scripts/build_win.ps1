@@ -100,15 +100,31 @@ try {
   Start-Sleep -Seconds 6
   $status = Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/status" -UseBasicParsing
   $ok = $status.Content -match '"serial":"na"' -and
-        $status.Content -match '"recognition":true' -and
+        $status.Content -match '"recognition":false' -and
         $status.Content -match '"bean":"ok"' -and
         $status.Content -match '"digit":"ok"'
   if (-not $ok) {
     throw "Web UI status check failed: $($status.Content)"
   }
+  # No-serial default is idle (recognition off) so the process does not pin
+  # 100% CPU while calibrating. DEBUG is the only way to force inference for
+  # calibration/verification — verify the toggle round-trips.
+  $dbg = Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/debug?mode=1" `
+                           -Method POST -UseBasicParsing
+  $status = Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/status" -UseBasicParsing
+  if ($dbg.Content -notmatch '"debug":true' -or
+      $status.Content -notmatch '"recognition":true') {
+    throw "DEBUG on did not force recognition: $($dbg.Content) / $($status.Content)"
+  }
+  Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/debug?mode=0" `
+                    -Method POST -UseBasicParsing | Out-Null
+  $status = Invoke-WebRequest -Uri "http://127.0.0.1:8080/api/status" -UseBasicParsing
+  if ($status.Content -notmatch '"recognition":false') {
+    throw "DEBUG off did not close the gate: $($status.Content)"
+  }
   $html = Invoke-WebRequest -Uri "http://127.0.0.1:8080/" -UseBasicParsing
   if ($html.Content -notmatch "Crane Vision") { throw "GET / did not return the UI" }
-  Write-Host "Web UI OK: serial=na, recognition=true, cameras ok"
+  Write-Host "Web UI OK: serial=na, recognition=off default, DEBUG round-trip works"
 } finally {
   Stop-Job $job -EA SilentlyContinue
   Remove-Job $job -Force -EA SilentlyContinue

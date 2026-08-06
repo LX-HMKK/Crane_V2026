@@ -93,6 +93,18 @@
               + '&_=' + Date.now();
   }
 
+  // The server closes the MJPEG connection when a viewer stops reading long
+  // enough to trip the 5s send timeout (background-tab throttle, lid close),
+  // or on restart; the <img> then fires onerror. Re-fetch the stream so the
+  // preview recovers without a manual view switch. Guarded: the settings view
+  // deliberately stops the stream, so never reconnect there.
+  video.onerror = () => {
+    if (videoWrap.style.display === 'none') return;
+    setTimeout(() => {
+      if (videoWrap.style.display !== 'none') setStream();
+    }, 2000);
+  };
+
   function setView(v) {
     view = v;
     for (const name of ['bean', 'digit', 'settings']) {
@@ -174,12 +186,11 @@
       setChip('st-digit', 'DIGIT: ' + (s.digit === 'ok' ? 'OK' : 'OFFLINE'), s.digit);
       if (s.serial === 'na') {
         setChip('st-serial', 'SERIAL: N/A', 'na');
-        // No serial backend -> recognition already always-on (nothing to gate
-        // on), so the DEBUG override is meaningless; disable it (reference
-        // layout disables, it does not hide).
-        debugBtn.disabled = true;
+        // No serial backend -> recognition gates OFF by default (nothing
+        // signals START), so DEBUG is the ONLY way to force it on for
+        // calibration/verification. Keep the button enabled (the reference
+        // layout disables it because there recognition is always-on).
       } else {
-        debugBtn.disabled = false;
         setChip('st-serial', 'SERIAL: ' + (s.serial === 'ok' ? 'OK' : 'OFFLINE'), s.serial);
       }
       setChip('st-start', 'START: ' + (s.start ? 'ON' : 'OFF'), s.start ? 'ok' : 'off');

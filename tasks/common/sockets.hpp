@@ -35,6 +35,7 @@
   #include <netinet/in.h>
   #include <netinet/tcp.h>
   #include <sys/socket.h>
+  #include <sys/time.h>  // timeval for SO_SNDTIMEO / SO_RCVTIMEO
   #include <unistd.h>
 #endif
 
@@ -194,6 +195,42 @@ inline ssize_t recv(Socket s, void* buf, size_t len, int flags) {
 #endif
   if (rc < 0) errno = last_error();
   return static_cast<ssize_t>(rc);
+}
+
+// Write all bytes, retrying on EINTR and short sends. Returns false on any
+// real error — including SO_SNDTIMEO expiry, which surfaces as EAGAIN /
+// ETIMEDOUT after the timeout on a blocking socket. A stalled client
+// (background-tab MJPEG throttle, network partition) therefore cannot hold
+// the caller in send() forever once a send timeout is set at accept time.
+inline bool send_all(Socket s, const char* data, size_t n) {
+  size_t sent = 0;
+  while (sent < n) {
+    ssize_t rc = send(s, data + sent, n - sent, kMsgNoSignal);
+    if (rc < 0) {
+      if (errno == EINTR) continue;
+      return false;
+    }
+    sent += static_cast<size_t>(rc);
+  }
+  return true;
+}
+
+// SO_SNDTIMEO / SO_RCVTIMEO take different value types per platform: a DWORD
+// of MILLISECONDS on Winsock, a struct timeval of seconds on POSIX. Passing a
+// timeval on Windows would make Winsock read the first 4 bytes (tv_sec) as a
+// millisecond count — tv_sec=5 becomes a 5ms timeout, not 5s. Always set the
+// send timeout through this helper.
+inline int set_send_timeout(Socket s, int timeout_sec) {
+#ifdef _WIN32
+  int ms = timeout_sec * 1000;
+  return setsockopt(s, SOL_SOCKET, SO_SNDTIMEO,
+                    static_cast<const char*>(static_cast<const void*>(&ms)),
+                    sizeof(ms));
+#else
+  timeval tv{};
+  tv.tv_sec = timeout_sec;
+  return setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
 }
 
 inline int inet_pton(int af, const char* src, void* dst) {
