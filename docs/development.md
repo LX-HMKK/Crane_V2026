@@ -73,6 +73,8 @@ sudo ./build/crane_vision --backend bpu --web-port 8080
 
 完整 CLI 见 `./build/crane_vision --help`。后端选择 `--backend auto|onnx|bpu`（auto：RDK X5 → bpu，其他 → onnx）。非 RDK 主机上 BPU 后端链接桩实现，调用时清晰报错。
 
+日志：所有 `LOG_*` 输出同时镜像到控制台和 `logs/crane_YYYYMMDD.log`（目录自动创建、按日滚动），可用 `--log-dir PATH` 改目录。日志目录已加入 `.gitignore`。
+
 ## WSL2 环境坑（本机实测）
 
 从 Windows Git Bash 调 WSL 的固定姿势：

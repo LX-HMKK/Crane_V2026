@@ -9,6 +9,7 @@ tasks/
   app.*              # 竞赛编排：采集×2 / 推理×2 / 任务合并 / 串口 / Web（根上唯一模块）
   common/            # types.hpp（Detection/FramePayload 等）+ logging.hpp + config.*
                      # + sockets.hpp（跨平台 socket shim：Winsock/Berkeley 统一，net::Socket）
+                     # logging.hpp：日志镜像到 logs/crane_YYYYMMDD.log（--log-dir 可改目录）
   io/
     camera.*         # ICamera / Camera(V4L2) / MockCamera / StaticImageCamera
     serial_port.*    # termios UART + 协议 + 后台线程

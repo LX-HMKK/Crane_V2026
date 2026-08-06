@@ -39,6 +39,7 @@ void print_usage(const char* argv0) {
       "  --no-web              disable the web calibration UI\n"
       "  --web-port N          web UI port (default 8080)\n"
       "  --web-listen ADDR     web UI listen address (default 0.0.0.0)\n"
+      "  --log-dir PATH        log file directory (default logs, daily crane_YYYYMMDD.log)\n"
       "  --ort-threads N       ONNX Runtime intra-op threads (default auto)\n"
       "  -v, --verbose         debug logging\n"
       "  -h, --help            this help\n",
@@ -56,6 +57,7 @@ int main(int argc, char** argv) {
   bool list_cams = false;
   int bench_rounds = 0;
   bool verbose = false;
+  std::string log_dir = "logs";
 
   for (int i = 1; i < argc; ++i) {
     std::string arg = argv[i];
@@ -84,6 +86,8 @@ int main(int argc, char** argv) {
       opts.web_port = std::stoi(next("--web-port"));
     } else if (arg == "--web-listen") {
       opts.web_listen = next("--web-listen");
+    } else if (arg == "--log-dir") {
+      log_dir = next("--log-dir");
     } else if (arg == "--ort-threads") {
       opts.ort_threads = std::stoi(next("--ort-threads"));
     } else if (arg == "--once") {
@@ -104,6 +108,7 @@ int main(int argc, char** argv) {
     }
   }
 
+  crane::Logger::instance().set_log_dir(log_dir);
   crane::Logger::instance().set_level(verbose ? crane::Logger::kDebug
                                               : crane::Logger::kInfo);
 
