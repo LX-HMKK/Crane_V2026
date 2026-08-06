@@ -25,13 +25,14 @@ python3 scripts/main_arm64.py --mock-cameras
 
 ## 配置字段
 
-见 `configs/vision.yaml`，主要包含：
+见 `configs/vision.yaml`，主要包含（完整字段与映射规则参考见 [docs/reference/vision_config.md](../reference/vision_config.md)）：
 
 - `serial`：串口设备、波特率、读超时、掉线重连（`serial.reconnect`）。
 - `protocol`：START 命令超时（默认 300 ms）、结果帧发送间隔（默认 0.1 s，对应 10 Hz）、轮询间隔、扫描重试间隔。
 - `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小、掉线重连（`cameras.<name>.reconnect`）。
 - `models.bean` / `models.digit`：`.bin` 模型路径与对应 `_rdkx5_config.yaml`。
-- `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`。
+- `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`、`start_gated`（默认 true，仅在下位机发送 START 时运行推理）。
+- `debug`：`force_inference`（headless 无 UI 时强制推理的现场调试开关）。
 - `scan`：连续扫描帧数、最大重试次数、总超时。
 - `lines`：豆子/数字辅助线位置，会被 UI 自动改写。
 - `mapping.bean_to_digit`：黄豆→1、绿豆→2、白芸豆→3（同时作为结果帧颜色编码）。
@@ -43,12 +44,12 @@ INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
 ```
 
 1. **INIT**：加载配置，初始化串口、两个 Camera、两个 BPU 模型，预热推理。
-2. **WAIT_START**：循环读取串口，检测下位机发送的 `A5 5A 01` START 命令。未收到前视觉端保持静默，不发送任何数据。
+2. **WAIT_START**：循环读取串口，检测下位机发送的 `A5 5A 01` START 命令。未收到前视觉端保持静默，不发送任何数据，也不运行模型推理；两路相机持续采集保持画面新鲜，模型保持加载待命（预热）。
 3. **SCANNING**：收到 START 后进入识别状态，连续采集 `scan.frames` 帧，分别对豆子/数字相机做 BPU 推理，通过 `TaskGenerator.generate_frame()` 生成 8 字节结果。
 4. **SENDING**：获得完整合法结果后，以 `protocol.send_interval_sec` 间隔（默认 0.1 s，即 10 Hz）重复发送 12 字节结果帧 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`。
 5. **SILENT**：若连续 300 ms 未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
 
-> **赛前准备阶段视觉保持串口静默**，只有收到 START 命令后才开始识别并回传结果帧。
+> **赛前准备阶段视觉保持静默**，只有收到 START 命令后才开始识别并回传结果帧。空闲期间模型不推理但保持加载；`CompetitionUI` 右侧的 **DEBUG** 按钮可无视 START 强制推理并显示到界面（仅调试显示，不改变串口回传门控），`configs/vision.yaml` 的 `inference.start_gated: false` 可整体关闭门控。
 
 ## 掉线重连与状态显示
 
