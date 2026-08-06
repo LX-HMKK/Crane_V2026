@@ -1148,3 +1148,220 @@ def test_competition_capture_worker_invalidates_detections_after_offline(
 
     assert ui._latest_dets["bean"] is None
     assert ui._latest_names["bean"] is None
+
+
+# ── START-gated inference + DEBUG mode (CompetitionUI) ────────────────
+
+
+def _serial_with_start(is_start_active):
+    serial = MagicMock()
+    serial.is_start_active = is_start_active
+    return serial
+
+
+def test_competition_should_infer_true_without_serial(tmp_path):
+    """x86 (no serial) must keep inferring; the gate is a no-op there."""
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    assert ui._should_infer() is True
+
+
+def test_competition_should_infer_on_start_active(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(True), root=MagicMock(), start_serial=False,
+    )
+    assert ui._should_infer() is True
+
+
+def test_competition_should_not_infer_when_idle(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(False), root=MagicMock(), start_serial=False,
+    )
+    assert ui._should_infer() is False
+
+
+def test_competition_should_infer_in_debug_mode(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(False), root=MagicMock(), start_serial=False,
+    )
+    ui._debug_force_inference = True
+    assert ui._should_infer() is True
+
+
+def test_competition_accepts_bool_and_callable_is_start_active(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    serial = _serial_with_start(False)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    assert ui._should_infer() is False
+
+    serial.is_start_active = lambda: True
+    assert ui._should_infer() is True
+
+
+def test_competition_start_gated_false_disables_gate(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui_cfg = {"inference": {"start_gated": False}}
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg.update(ui_cfg)
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(False), root=MagicMock(), start_serial=False,
+    )
+    assert ui._should_infer() is True
+
+
+def test_submit_frame_gated_off_clears_state_and_does_not_queue(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    serial = _serial_with_start(False)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    ui._latest_dets = {"bean": [[1, 2, 3, 4, 0.9, 0]], "digit": None}
+    ui._latest_names = {"bean": {0: "bean"}, "digit": None}
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    ui._submit_frame_for_inference("bean", frame)
+
+    assert ui._infer_pending["bean"] is None
+    assert ui._latest_dets["bean"] is None
+    assert serial.current_frame is None
+
+
+def test_submit_frame_gated_on_queues(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+    ui._submit_frame_for_inference("bean", frame)
+
+    assert ui._infer_pending["bean"] is not None
+    assert not np.shares_memory(ui._infer_pending["bean"], frame)
+
+
+def test_competition_gate_off_resets_last_frame_for_sticky_resume(tmp_path):
+    """gate-off must reset _last_frame so a re-generated identical result can
+    be re-published to serial after START resumes."""
+    cfg_path = _write_cfg(tmp_path)
+    serial = _serial_with_start(False)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    ui._last_frame = (1, 2, 3, 4, 5, 1, 2, 3)
+    ui._last_task_update_at = 123.0
+    ui._consecutive_failures = 7
+
+    ui._on_inference_gate_closed()
+
+    assert ui._last_frame is None
+    assert ui._last_task_update_at is None
+    assert ui._consecutive_failures == 0
+    assert serial.current_frame is None
+
+
+def test_competition_debug_forced_does_not_write_serial(tmp_path):
+    """DEBUG results update the UI overlay but never the serial cache/counters."""
+    cfg_path = _write_cfg(tmp_path)
+    serial = _serial_with_start(False)
+    task_gen = MagicMock()
+    task_gen.generate_frame_with_completion.return_value = (
+        (1, 2, 3, 4, 5, 1, 2, 3),
+        {1: (1, "detected", 0.9)},
+        {},
+        "ok",
+    )
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        task_gen=task_gen, serial_thread=serial, root=MagicMock(), start_serial=False,
+    )
+    ui._latest_dets = {"bean": [["bean"]], "digit": [["digit"]]}
+    ui._consecutive_failures = 3
+    serial.current_frame = None
+
+    ui._update_task_from_latest_detections(debug_forced=True)
+
+    assert serial.current_frame is None
+    assert ui._consecutive_failures == 3
+    assert ui._zone_results["bean"] == {1: (1, "detected", 0.9)}
+
+
+def test_competition_debug_toggle_flips_gate_and_button(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(False), root=MagicMock(), start_serial=False,
+    )
+    assert ui._debug_force_inference is False
+    assert ui._should_infer() is False
+
+    ui._toggle_debug()
+
+    assert ui._debug_force_inference is True
+    assert ui._should_infer() is True
+    assert ui._debug_button.config.call_args.kwargs["relief"] == tk.SUNKEN
+
+    ui._toggle_debug()
+    assert ui._debug_force_inference is False
+    assert ui._should_infer() is False
+
+
+def test_competition_debug_button_disabled_without_serial(tmp_path):
+    cfg_path = _write_cfg(tmp_path)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        root=MagicMock(), start_serial=False,
+    )
+    assert ui._debug_button_usable() is False
+    assert ui._debug_button.config.call_args.kwargs["state"] == tk.DISABLED
+
+
+def test_competition_idle_update_frame_suppresses_overlay(tmp_path, monkeypatch):
+    """Idle (no START, no DEBUG) renders the live feed with no overlays."""
+    cfg_path = _write_cfg(tmp_path)
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    ui = CompetitionUI(
+        str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
+        serial_thread=_serial_with_start(False), root=MagicMock(), start_serial=False,
+    )
+    ui.mode = "bean"
+    ui._capture_ready = {"bean": True, "digit": False}
+    ui._capture_failures = {"bean": 0, "digit": 0}
+    ui._captured_frames = {"bean": frame, "digit": None}
+    ui._latest_dets = {"bean": [[1, 2, 3, 4, 0.9, 0]], "digit": None}
+    ui._latest_names = {"bean": {0: "bean"}, "digit": None}
+    ui._zone_results = {"bean": {1: (1, "detected", 0.9)}, "digit": {}}
+
+    draw_calls = []
+    monkeypatch.setattr(
+        ui, "_draw_detections", lambda *a, **k: draw_calls.append((a, k))
+    )
+    shown = []
+    monkeypatch.setattr(ui, "_show_frame", lambda f: shown.append(f))
+    monkeypatch.setattr(ui, "_resize_for_display", lambda f, **k: f)
+
+    ui._running = True
+    try:
+        ui._update_frame()
+    finally:
+        ui._running = False
+
+    assert draw_calls == []
+    assert shown == [frame]

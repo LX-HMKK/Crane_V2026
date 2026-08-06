@@ -40,6 +40,7 @@ _RUNTIME_IMPORT_DURATION_SEC = time.monotonic() - _BOOTSTRAP_STARTED_AT
 
 CAMERA_FAILURE_BACKOFF_SEC = 0.1
 CAMERA_FAILURE_LOG_INTERVAL_SEC = 5.0
+IDLE_POLL_INTERVAL_SEC = 0.01
 
 
 def _startup_phase(started_at, phase):
@@ -114,6 +115,11 @@ class HeadlessCompetitionLoop:
         self.task_gen = task_gen
         self.serial = serial
         self.started_at = started_at
+        # Field debugging without a UI: force inference even when START is
+        # inactive. Set by the UI DEBUG button and synced back on handoff.
+        self.debug_force_inference = bool(
+            cfg.get("debug", {}).get("force_inference", False)
+        )
         self.first_result_at = None
         self.consecutive_failures = 0
         self.last_frame = None
@@ -121,9 +127,35 @@ class HeadlessCompetitionLoop:
         self._last_capture_failure_log_at = None
         self._capture_failed_this_scan = False
 
+    def inference_enabled(self):
+        """Whether the headless loop should run inference right now.
+
+        Competition rules gate recognition on the lower machine's START
+        heartbeat. The gate can be bypassed by config (inference.start_gated
+        disabled) or by the DEBUG override, and is lenient when the serial
+        stub/thread lacks the is_start_active attribute so tests and dev
+        runs keep scanning.
+        """
+        if not self.cfg.get("inference", {}).get("start_gated", True):
+            return True
+        if self.debug_force_inference:
+            return True
+        active = getattr(self.serial, "is_start_active", None)
+        if active is None:
+            return True
+        return bool(active() if callable(active) else active)
+
     def run(self, handoff_ready=None):
         """Run until a handoff callback returns true, or forever when omitted."""
         while True:
+            if not self.inference_enabled():
+                # No START yet: keep the models warm and poll without running
+                # inference. Idle must never count toward failure counters,
+                # and the UI handoff still needs to be honored.
+                if handoff_ready is not None and handoff_ready():
+                    return
+                time.sleep(IDLE_POLL_INTERVAL_SEC)
+                continue
             retry_after_capture_failure = self._scan_once()
             if handoff_ready is not None and handoff_ready():
                 return
@@ -311,6 +343,10 @@ def _run_headless_then_ui(loop, cfg_path):
             ui.run()
             # The UI mutates the shared config object, including calibration lines.
             loop.cfg = ui.cfg
+            # Carry the operator's DEBUG override back into the headless loop.
+            loop.debug_force_inference = getattr(
+                ui, "_debug_force_inference", False
+            )
             logging.info("Competition UI closed; resuming headless competition mode")
             loop.run()
         except Exception:

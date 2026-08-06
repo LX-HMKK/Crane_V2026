@@ -16,6 +16,8 @@ def test_vision_yaml_exists_and_parses():
     assert cfg["mapping"]["bean_to_digit"]["yellow"] == 1
     assert cfg["models"]["bean"]["pt"] == "assets/beans_v6.pt"
     assert cfg["models"]["digit"]["pt"] == "assets/num_v6.pt"
+    assert cfg["inference"]["start_gated"] is True
+    assert cfg["debug"]["force_inference"] is False
 
 
 def test_models_package_exists():

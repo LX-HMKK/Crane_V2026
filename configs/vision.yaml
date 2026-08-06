@@ -57,6 +57,8 @@ inference:
   conf_thres: 0.25
   iou_thres: 0.45
   pad: 127
+  # 推理门控：仅在下位机发送 START 时运行推理；无串口(x86)或 DEBUG 模式时忽略
+  start_gated: true
 ui:
   window:
     fullscreen: true
@@ -93,3 +95,6 @@ mapping:
     yellow: 1
     green: 2
     white: 3
+debug:
+  # 现场调试：headless 无 UI 时也可强制推理（等价于 UI 的 DEBUG 按钮）
+  force_inference: false

@@ -201,3 +201,184 @@ def test_headless_logic_failure_clears_after_outage_recovery(monkeypatch):
 
     # After 10 consecutive logic failures post-recovery, the sticky frame clears.
     assert serial.current_frame is None
+
+
+# ── START-gated inference (headless) ───────────────────────────────────
+
+
+def _serial_stub(current_frame=None, is_start_active=True):
+    """SerialThread stand-in with an explicit is_start_active attribute."""
+    return type(
+        "Serial",
+        (),
+        {"current_frame": current_frame, "is_start_active": is_start_active},
+    )()
+
+
+def test_headless_idles_without_start(monkeypatch):
+    """With START inactive the headless loop must not scan or touch state."""
+    import scripts.main_arm64 as main_arm64
+
+    scan_calls = []
+
+    def counting_scan(*_args, **_kwargs):
+        scan_calls.append(1)
+        return [], [], "ok"
+
+    monkeypatch.setattr(main_arm64, "scan_once_dets", counting_scan)
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub((1, 2, 3, 4, 5, 1, 2, 3), is_start_active=False)
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), object(), serial, 0.0
+    )
+    checks = {"n": 0}
+
+    def handoff_ready():
+        checks["n"] += 1
+        return checks["n"] >= 3  # a few idle ticks, then hand off
+
+    loop.run(handoff_ready=handoff_ready)
+
+    assert scan_calls == []
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    assert loop.consecutive_failures == 0
+
+
+def test_headless_scans_when_start_active(monkeypatch):
+    """With START active the headless loop scans and publishes a result."""
+    import scripts.main_arm64 as main_arm64
+
+    monkeypatch.setattr(
+        main_arm64,
+        "scan_once_dets",
+        lambda *_a, **_k: (["bean"], ["digit"], "ok"),
+    )
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub(None, is_start_active=True)
+    task_gen = _TaskGenerator()
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), task_gen, serial, 0.0
+    )
+    loop.run(handoff_ready=lambda: True)
+
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    assert len(task_gen.calls) == 1
+
+
+def test_headless_idle_does_not_count_as_failures(monkeypatch):
+    """Idle ticks must not inflate consecutive_failures or clear the frame."""
+    import scripts.main_arm64 as main_arm64
+
+    scan_calls = []
+
+    def counting_scan(*_args, **_kwargs):
+        scan_calls.append(1)
+        return [], [], "ok"
+
+    monkeypatch.setattr(main_arm64, "scan_once_dets", counting_scan)
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub((1, 2, 3, 4, 5, 1, 2, 3), is_start_active=False)
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), object(), serial, 0.0
+    )
+    loop.consecutive_failures = 5
+    checks = {"n": 0}
+
+    def handoff_ready():
+        checks["n"] += 1
+        return checks["n"] >= 12  # run past the clear-on-10 threshold in idle
+
+    loop.run(handoff_ready=handoff_ready)
+
+    assert loop.consecutive_failures == 5
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+    assert scan_calls == []
+
+
+def test_headless_handoff_during_idle_returns_promptly(monkeypatch):
+    """The UI handoff must still be honored while inference is gated off."""
+    import scripts.main_arm64 as main_arm64
+
+    scan_calls = []
+
+    def counting_scan(*_args, **_kwargs):
+        scan_calls.append(1)
+        return [], [], "ok"
+
+    monkeypatch.setattr(main_arm64, "scan_once_dets", counting_scan)
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub(None, is_start_active=False)
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), object(), serial, 0.0
+    )
+    loop.run(handoff_ready=lambda: True)
+
+    assert scan_calls == []
+
+
+def test_headless_debug_force_overrides_inactive_start(monkeypatch):
+    """debug_force_inference bypasses an inactive START (field debugging)."""
+    import scripts.main_arm64 as main_arm64
+
+    monkeypatch.setattr(
+        main_arm64,
+        "scan_once_dets",
+        lambda *_a, **_k: (["bean"], ["digit"], "ok"),
+    )
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub(None, is_start_active=False)
+    task_gen = _TaskGenerator()
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), task_gen, serial, 0.0
+    )
+    loop.debug_force_inference = True
+    loop.run(handoff_ready=lambda: True)
+
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+
+
+def test_headless_start_gated_false_scans_without_start(monkeypatch):
+    """inference.start_gated=False disables the gate entirely."""
+    import scripts.main_arm64 as main_arm64
+
+    monkeypatch.setattr(
+        main_arm64,
+        "scan_once_dets",
+        lambda *_a, **_k: (["bean"], ["digit"], "ok"),
+    )
+    monkeypatch.setattr(main_arm64.time, "sleep", lambda _s: None)
+
+    serial = _serial_stub(None, is_start_active=False)
+    task_gen = _TaskGenerator()
+    loop = HeadlessCompetitionLoop(
+        {"inference": {"start_gated": False}},
+        object(), object(), object(), object(), task_gen, serial, 0.0,
+    )
+    loop.run(handoff_ready=lambda: True)
+
+    assert serial.current_frame == (1, 2, 3, 4, 5, 1, 2, 3)
+
+
+def test_headless_idle_uses_poll_interval(monkeypatch):
+    """The idle branch must sleep, never busy-loop the CPU."""
+    import scripts.main_arm64 as main_arm64
+
+    monkeypatch.setattr(
+        main_arm64, "scan_once_dets", lambda *_a, **_k: ([], [], "ok")
+    )
+    sleeps = []
+    monkeypatch.setattr(main_arm64.time, "sleep", sleeps.append)
+
+    serial = _serial_stub(None, is_start_active=False)
+    loop = HeadlessCompetitionLoop(
+        {}, object(), object(), object(), object(), object(), serial, 0.0
+    )
+    checks = iter((False, True))  # one idle tick, then hand off
+    loop.run(handoff_ready=lambda: next(checks))
+
+    assert sleeps == [main_arm64.IDLE_POLL_INTERVAL_SEC]
