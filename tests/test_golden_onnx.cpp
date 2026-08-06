@@ -71,10 +71,15 @@ void check_dets(const char* name, const crane::Detections& dets,
 
 int main() {
   // ── 1. bean model on beans_2.jpg ─────────────────────────────────────
+  // exec_provider is pinned to "cpu": the golden reference is deterministic
+  // CPU output, so it must never run on the GPU EP even on a CUDA-enabled
+  // build.
   auto bean_model = crane::load_onnx_model("assets/beans_v6.onnx",
                                            /*conf_thres=*/0.25f,
                                            /*iou_thres=*/0.45f,
-                                           /*pad_value=*/127);
+                                           /*pad_value=*/127,
+                                           /*intra_threads=*/0,
+                                           /*exec_provider=*/"cpu");
   cv::Mat bean_img = cv::imread("tests/data/beans_2.jpg");
   if (bean_img.empty()) {
     std::printf("FAIL: cannot load tests/data/beans_2.jpg\n");
@@ -90,7 +95,9 @@ int main() {
   auto digit_model = crane::load_onnx_model("assets/num_v6.onnx",
                                             /*conf_thres=*/0.25f,
                                             /*iou_thres=*/0.45f,
-                                            /*pad_value=*/127);
+                                            /*pad_value=*/127,
+                                            /*intra_threads=*/0,
+                                            /*exec_provider=*/"cpu");
   cv::Mat digit_img = cv::imread("tests/data/num_2.jpg");
   if (digit_img.empty()) {
     std::printf("FAIL: cannot load tests/data/num_2.jpg\n");

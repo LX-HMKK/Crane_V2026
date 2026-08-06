@@ -20,7 +20,7 @@ tasks/
   inference/
     yolo11.*         # letterbox / DFL / sigmoid / 逐类 NMS / 坐标回映 / NV12
     model.*          # Yolo11Model：预处理 → 后端 → 后处理 → 回映
-    onnx_backend.*   # ONNX Runtime 后端（x86 验证）
+    onnx_backend.*   # ONNX Runtime 后端（x86 验证；--backend cuda 可选挂 CUDA EP）
     bpu_backend.*    # RDK X5 BPU 后端（板端）
     bpu_stub.c       # 非 RDK 主机的 libDNN 桩（保证全平台可编译链接）
   web/               # 内嵌 HTTP server(keep-alive) + MJPEG(降采样≤960宽) + REST
@@ -38,6 +38,7 @@ Windows 原生编译**仅做开发验证**（MSVC + `--mock-cameras --no-serial`
 - **相机**：`Camera` 的 `v4l2-ctl` shell-out 与 `/dev/video*` 枚举 `#ifndef _WIN32` 屏蔽；`cv::CAP_V4L2` 只是枚举常量可编译。Windows 上真相机退化为离线占位（`fallback_empty` → 空 MockCamera），dev 路径用 `--mock-cameras`。
 - **其他**：`logging.hpp` 用 `localtime_s`；`main.cpp` 的 `SIGPIPE`（MSVC 未定义）加 `#ifndef _WIN32`；NaN 用 `std::numeric_limits<double>::quiet_NaN()`（`0.0/0.0` 是 MSVC C2124）；ORT 模型路径经 `std::filesystem::path`（`ORTCHAR_T` 在 Windows 是 `wchar_t`）。
 - 构建/依赖：`scripts/setup_deps_win.ps1` + `scripts/build_win.ps1`，生成器 `Visual Studio 18 2026`。详见 `docs/development.md`。
+- **GPU 加速（可选）**：`setup_deps_win.ps1 -GPU` 把 ORT 换成 win-x64-gpu 包，CMake 用 `if(EXISTS)` 探测 `onnxruntime_providers_cuda.dll`/`_shared.dll`（不是 `find_file`，避免 CPU 包 configure 的缓存 `-NOTFOUND`）并 POST_BUILD 拷到 exe 旁。`--backend cuda` 在 `onnx_backend.cpp` 里用**裸 C API**（`SessionOptionsAppendExecutionProvider_CUDA`，CPU 包头文件也编译得过，运行时才失败）注册 CUDA EP，并设 `session.disable_cpu_ep_fallback=1`——cuDNN/cudart 缺失或版本不匹配时**硬报错，绝不静默回退 CPU**。需要 CUDA 12.x + cuDNN 9.x 在 PATH。golden 测试显式钉 `"cpu"`，GPU 包不影响其确定性。
 
 ## 双推理后端
 

@@ -31,7 +31,9 @@ void print_usage(const char* argv0) {
       "\n"
       "Options\n"
       "  --config PATH         vision.yaml path (default configs/vision.yaml)\n"
-      "  --backend NAME        auto | onnx | bpu (default auto)\n"
+      "  --backend NAME        auto | onnx | bpu | cuda (default auto)\n"
+      "                        cuda = ONNX + CUDA execution provider (Windows,\n"
+      "                        requires the GPU ORT package + CUDA 12/cuDNN 9)\n"
       "  --mock-cameras        synthetic test cameras\n"
       "  --bean-image PATH     static bean camera image (overrides camera)\n"
       "  --digit-image PATH    static digit camera image (overrides camera)\n"
@@ -115,6 +117,15 @@ int main(int argc, char** argv) {
   if (list_cams) {
     crane::list_cameras();
     return 0;
+  }
+
+  if (backend != "auto" && backend != "onnx" && backend != "bpu" &&
+      backend != "cuda") {
+    std::fprintf(stderr, "invalid --backend value: %s "
+                         "(expected auto | onnx | bpu | cuda)\n",
+                 backend.c_str());
+    print_usage(argv[0]);
+    return 2;
   }
 
   opts.backend = backend;

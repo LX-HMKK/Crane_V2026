@@ -137,7 +137,33 @@ if(CRANE_WITH_ONNXRUNTIME AND WIN32)
   # build_win.ps1, and test_golden_onnx gets its own POST_BUILD below.
   find_file(ONNXRUNTIME_DLL onnxruntime.dll PATHS "${ONNXRUNTIME_ROOT}/lib"
             NO_DEFAULT_PATH)
+  # GPU package (setup_deps_win.ps1 -GPU) adds the CUDA provider + its shared
+  # loader. Detect with if(EXISTS) — not find_file, which caches a -NOTFOUND
+  # from a CPU-package configure and never re-checks after a package swap.
+  set(ORT_PROVIDER_DLLS "")
+  foreach(_p onnxruntime_providers_cuda.dll onnxruntime_providers_shared.dll)
+    if(EXISTS "${ONNXRUNTIME_ROOT}/lib/${_p}")
+      list(APPEND ORT_PROVIDER_DLLS "${ONNXRUNTIME_ROOT}/lib/${_p}")
+    endif()
+  endforeach()
+  if(ORT_PROVIDER_DLLS)
+    message(STATUS "ORT CUDA provider DLLs: ${ORT_PROVIDER_DLLS}")
+  endif()
 endif()
+
+# Copy every ORT runtime DLL next to <target> so the exe loads without PATH
+# games: onnxruntime.dll always, plus the CUDA provider DLLs when the GPU
+# package is installed.
+function(crane_ort_copy_dlls target)
+  add_custom_command(TARGET ${target} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:${target}>")
+  foreach(_dll IN LISTS ORT_PROVIDER_DLLS)
+    add_custom_command(TARGET ${target} POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${_dll}" "$<TARGET_FILE_DIR:${target}>")
+  endforeach()
+endfunction()
 
 # ── main binary ───────────────────────────────────────────────────────
 add_executable(crane_vision src/main.cpp)
@@ -145,9 +171,7 @@ target_link_libraries(crane_vision PRIVATE crane_core)
 if(CRANE_WITH_ONNXRUNTIME)
   # keep the ORT shared library reachable from the binary dir
   if(WIN32)
-    add_custom_command(TARGET crane_vision POST_BUILD
-      COMMAND ${CMAKE_COMMAND} -E copy_if_different
-              "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:crane_vision>")
+    crane_ort_copy_dlls(crane_vision)
   else()
     add_custom_command(TARGET crane_vision POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -173,9 +197,7 @@ if(CRANE_BUILD_TESTS)
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if(WIN32)
       # ctest runs the exe directly, so it needs onnxruntime.dll beside it.
-      add_custom_command(TARGET test_golden_onnx POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:test_golden_onnx>")
+      crane_ort_copy_dlls(test_golden_onnx)
     endif()
   endif()
 endif()

@@ -5,7 +5,14 @@
 #   OpenCV -> tools/opencv            (official 4.12 prebuilt, self-extract)
 #   yaml-cpp -> tools/yaml-cpp        (0.7.0 built from source once, static)
 #
-# Run from anywhere: `powershell -ExecutionPolicy Bypass -File scripts\setup_deps_win.ps1`
+# Run from anywhere:
+#   powershell -ExecutionPolicy Bypass -File scripts\setup_deps_win.ps1          # CPU ORT (portable default)
+#   powershell -ExecutionPolicy Bypass -File scripts\setup_deps_win.ps1 -GPU     # GPU ORT (needs CUDA 12 + cuDNN 9)
+#
+# The GPU package adds onnxruntime_providers_cuda.dll + _shared.dll; CMake
+# detects them and enables the --backend cuda path. CPU sessions still work on
+# the GPU package, so the golden / dev-verification runs stay portable either way.
+param([switch]$GPU)
 $ErrorActionPreference = "Stop"
 $root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $tools = Join-Path $root "tools"
@@ -16,10 +23,18 @@ $yamlVer = "0.7.0"
 
 # ── ONNX Runtime ────────────────────────────────────────────────────────
 $ortDir = Join-Path $tools "onnxruntime-win"
-if (-not (Test-Path (Join-Path $ortDir "lib\onnxruntime.dll"))) {
-  Write-Host "==> ONNX Runtime $ortVer (win-x64)"
-  $zip = Join-Path $env:TEMP "onnxruntime-win-x64-$ortVer.zip"
-  Invoke-WebRequest -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$ortVer/onnxruntime-win-x64-$ortVer.zip" -OutFile $zip
+# CPU package is the portable default; -GPU switches to onnxruntime-win-x64-gpu
+# (same layout: include/ + lib/, the CUDA provider DLLs sit in lib/). Presence
+# is flavor-aware: requesting -GPU over an existing CPU tree re-downloads; the
+# default run leaves a prior GPU tree alone (its CPU sessions still work).
+$flavor = if ($GPU) { "gpu" } else { "cpu" }
+$hasOrt = Test-Path (Join-Path $ortDir "lib\onnxruntime.dll")
+$hasCudaDll = Test-Path (Join-Path $ortDir "lib\onnxruntime_providers_cuda.dll")
+if (-not $hasOrt -or ($GPU -and -not $hasCudaDll)) {
+  Write-Host "==> ONNX Runtime $ortVer (win-x64-$flavor)"
+  if ($hasOrt) { Remove-Item $ortDir -Recurse -Force }
+  $zip = Join-Path $env:TEMP "onnxruntime-win-x64-$flavor-$ortVer.zip"
+  Invoke-WebRequest -Uri "https://github.com/microsoft/onnxruntime/releases/download/v$ortVer/onnxruntime-win-x64-$flavor-$ortVer.zip" -OutFile $zip
   New-Item -ItemType Directory -Force $ortDir | Out-Null
   Expand-Archive -Path $zip -DestinationPath $ortDir
   # Hoist the inner onnxruntime-win-*/ folder so layout matches tools/onnxruntime.
@@ -30,7 +45,8 @@ if (-not (Test-Path (Join-Path $ortDir "lib\onnxruntime.dll"))) {
   }
   Remove-Item $zip -Force
 } else {
-  Write-Host "==> ONNX Runtime present, skipping"
+  $actual = if ($hasCudaDll) { "gpu" } else { "cpu" }
+  Write-Host "==> ONNX Runtime present (win-x64-$actual), skipping"
 }
 
 # ── OpenCV prebuilt ─────────────────────────────────────────────────────

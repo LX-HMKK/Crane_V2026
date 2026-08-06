@@ -87,6 +87,36 @@ Write-Host "`n==> smoke: --once"
        --digit-image (Join-Path $root "tests\data\num_2.jpg")
 if ($LASTEXITCODE -ne 0) { throw "--once smoke failed" }
 
+# ── Smoke: CUDA EP (only when the GPU ORT package is installed) ─────────
+# Informational, NOT fatal: the CPU dev-verification path above is the point
+# of this script; this only reports whether --backend cuda is usable right
+# now. Needs CUDA 12 + cuDNN 9 on PATH. GPU avg is ~5-8ms on an RTX 4060 vs
+# ~27ms CPU, so an avg > 15ms means the bench ran on the CPU EP.
+if (Test-Path (Join-Path $ortRoot "lib\onnxruntime_providers_cuda.dll")) {
+  Write-Host "`n==> smoke: --backend cuda bench (informational)"
+  $cudaOut = & $exe --backend cuda --mock-cameras --bench 10 2>&1
+  $cudaOut | ForEach-Object { Write-Host "    $_" }
+  $cudaOk = $LASTEXITCODE -eq 0
+  if ($cudaOk) {
+    foreach ($line in $cudaOut) {
+      if ($line -match 'avg=([0-9.]+)ms') {
+        if ([double]$matches[1] -gt 15.0) { $cudaOk = $false }
+      }
+    }
+  }
+  if ($cudaOk) {
+    Write-Host "    CUDA EP OK (GPU inference active)"
+  } else {
+    Write-Host "    WARN: CUDA EP smoke failed (exit $LASTEXITCODE) — install CUDA 12.x + cuDNN 9.x and add both bin dirs to PATH; CPU verification above is unaffected"
+  }
+} else {
+  Write-Host "`n==> CUDA EP smoke skipped (CPU ORT package; run setup_deps_win.ps1 -GPU for GPU)"
+}
+# The CUDA exe run above leaves $LASTEXITCODE=1 when CUDA is not yet installed;
+# it is informational only, so reset it — the script's exit code must reflect
+# the actual dev-verification build, not the optional GPU probe.
+$LASTEXITCODE = 0
+
 # ── Smoke: Web UI boot (127.0.0.1 avoids the firewall prompt) ────────────
 Write-Host "`n==> smoke: Web UI"
 $job = Start-Job -ScriptBlock {
@@ -131,3 +161,8 @@ try {
 }
 
 Write-Host "`nWindows dev-verification build OK"
+# Explicit exit 0: the CUDA smoke and the Web-UI Start-Job leave $LASTEXITCODE
+# nonzero (informational probe + job child-process exit code), so without this
+# the script "fails" despite every check passing. All real failures throw above
+# and never reach here.
+exit 0

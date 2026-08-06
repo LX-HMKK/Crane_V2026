@@ -73,7 +73,7 @@ sudo ./build/crane_vision --backend bpu --web-port 8080
                      --digit-image tests/data/num_2.jpg
 ```
 
-完整 CLI 见 `./build/crane_vision --help`。后端选择 `--backend auto|onnx|bpu`（auto：RDK X5 → bpu，其他 → onnx）。非 RDK 主机上 BPU 后端链接桩实现，调用时清晰报错。
+完整 CLI 见 `./build/crane_vision --help`。后端选择 `--backend auto|onnx|bpu|cuda`（auto：RDK X5 → bpu，其他 → onnx；`cuda` = ONNX + CUDA EP，仅 Windows 开发验证、需 GPU 版 ORT + CUDA 12/cuDNN 9，见下文 Windows 一节）。非 RDK 主机上 BPU 后端链接桩实现，调用时清晰报错。
 
 日志：所有 `LOG_*` 输出同时镜像到控制台和 `logs/crane_YYYYMMDD.log`（目录自动创建、按日滚动），可用 `--log-dir PATH` 改目录。日志目录已加入 `.gitignore`。
 
@@ -102,15 +102,25 @@ bash scripts/wsl_run.sh <cmd>           # WSL 内跑二进制：cd 项目根 + �
 # 依赖：ORT win zip → tools/onnxruntime-win、OpenCV 4.12 预编译 → tools/opencv、
 #       yaml-cpp 0.7.0 源码一次构建 → tools/yaml-cpp（幂等，跳过已存在项）
 powershell -ExecutionPolicy Bypass -File scripts/setup_deps_win.ps1
+# GPU 加速：同上加 -GPU 下载 win-x64-gpu 包（需 CUDA 12.x + cuDNN 9.x 在 PATH）
+powershell -ExecutionPolicy Bypass -File scripts/setup_deps_win.ps1 -GPU
 
-# 构建 + ctest 3/3 + --once 冒烟 + Web UI 冒烟
+# 构建 + ctest 3/3 + --once 冒烟 + CUDA 冒烟（仅装 GPU 包时）+ Web UI 冒烟
 powershell -ExecutionPolicy Bypass -File scripts/build_win.ps1
 ```
 
 - 工具链：MSVC BuildTools 18（vs 2026）+ CMake ≥ 4.4，生成器 `Visual Studio 18 2026`（免 vcvars64）。脚本也会回退 Ninja + vcvars64。
 - OpenCV_DIR 指向 **`x64\vcXX\lib`**（顶层 `OpenCVConfig.cmake` 不认 MSVC 14.50，会 OpenCV_FOUND=FALSE）。vc16 导入库与新版 MSVC ABI 兼容。
-- 运行时 DLL：`onnxruntime.dll`（win zip 里在 `lib/` 无 `bin/`）由 POST_BUILD 拷到 exe 旁；OpenCV `opencv_world4120.dll` 与 ORT DLL 靠脚本里设置的 PATH。
-- ctest：`logic`/`serial`/`golden_onnx` 3/3。`test_start_gate.py` 仍需 WSL（pty 伪串口）；Windows 串口覆盖仅 `test_serial`（loopback TCP 代替 socketpair）。
+- 运行时 DLL：`onnxruntime.dll`（win zip 里在 `lib/` 无 `bin/`）与 CUDA provider DLL（GPU 包）由 POST_BUILD 拷到 exe 旁；OpenCV `opencv_world4120.dll` 与 ORT DLL 靠脚本里设置的 PATH。
+- ctest：`logic`/`serial`/`golden_onnx` 3/3。`test_golden_onnx` 显式传 `exec_provider="cpu"`——golden 是确定性 CPU 参考，**即使装 GPU 包也不走 CUDA**。`test_start_gate.py` 仍需 WSL（pty 伪串口）；Windows 串口覆盖仅 `test_serial`（loopback TCP 代替 socketpair）。
+
+### CUDA 加速（--backend cuda）
+
+- 前提：`setup_deps_win.ps1 -GPU` 装 win-x64-gpu 包，且本机装好 **CUDA 12.x**（任意 12.x，12.8 构建向前兼容）与 **cuDNN 9.x**（大版本必须 9，8 不行），把 `CUDA\bin` 与 cuDNN `bin` 加进 `PATH`。驱动 ≥ 528.33（RTX 4060 Laptop 实测 566.26 可初始化）。
+- 运行：`crane_vision.exe --mock-cameras --no-serial --backend cuda --web-port 8080`，或用 `--bench 30` 看单帧耗时（4060 实测 ~6ms vs CPU ~27ms）。
+- 行为：CUDA EP 用裸 C API 注册 + `session.disable_cpu_ep_fallback=1`，cuDNN/cudart 缺失或版本不匹配时**会话创建即硬报错**（不会静默退回 CPU）。缺 GPU 依赖最常见报错是 `LoadLibrary failed with error 126` / "Require cuDNN 9.* and CUDA 12.*"。
+- 冒烟：build_win.ps1 在检测到 GPU 包时跑 `--backend cuda --bench 10`，断言 avg < 15ms（GPU ~6ms vs CPU ~27ms，>15ms 说明没在 GPU 上跑）。该冒烟是**信息性**的：CUDA 没装好时只打 WARN，不阻断 CPU 验证构建。
+- CPU 会话在 GPU 包上照常工作，所以默认（不带 -GPU）路径、golden、以及没装 CUDA 的机器都不受影响。
 
 ## RDK X5 部署
 

@@ -161,8 +161,11 @@ void CompetitionApp::load_models() {
         auto pos = onnx.rfind(".pt");
         if (pos != std::string::npos) onnx.replace(pos, 3, ".onnx");
       }
+      // "cuda" is the only GPU backend; everything else on the ONNX path uses
+      // the deterministic CPU execution provider.
+      const char* ep = (backend == "cuda") ? "cuda" : "cpu";
       models_[idx] =
-          load_onnx_model(onnx, conf, iou, pad, opts_.ort_threads);
+          load_onnx_model(onnx, conf, iou, pad, opts_.ort_threads, ep);
     }
   }
   LOG_INFO("Startup: models loaded (%s backend) at %.2fs", backend.c_str(),

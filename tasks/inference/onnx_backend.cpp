@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include <onnxruntime_cxx_api.h>
+#include <onnxruntime_session_options_config_keys.h>
 #include <opencv2/dnn.hpp>
 
 #include "common/logging.hpp"
@@ -31,6 +32,7 @@ Ort::Env& shared_env(int intra_threads) {
 }  // namespace
 
 struct OnnxBackend::Impl {
+  std::string exec_provider;
   Ort::Session session;
   Ort::AllocatorWithDefaultOptions allocator;
   Ort::AllocatedStringPtr input_name;
@@ -38,9 +40,11 @@ struct OnnxBackend::Impl {
   std::vector<int64_t> input_dims;   // [1,3,H,W]
   std::vector<int64_t> output_dims;  // [1,4+nc,N]
 
-  explicit Impl(const std::string& path, int intra_threads)
-      : session(make_session(shared_env(intra_threads), path,
-                             intra_threads)),
+  explicit Impl(const std::string& path, int intra_threads,
+                const std::string& exec_provider)
+      : exec_provider(exec_provider),
+        session(make_session(shared_env(intra_threads), path, intra_threads,
+                             exec_provider)),
         input_name(session.GetInputNameAllocated(0, allocator)),
         output_name(session.GetOutputNameAllocated(0, allocator)) {
     Ort::TypeInfo in_info = session.GetInputTypeInfo(0);
@@ -51,24 +55,45 @@ struct OnnxBackend::Impl {
 
  private:
   static Ort::Session make_session(Ort::Env& env, const std::string& path,
-                                   int intra_threads) {
+                                   int intra_threads,
+                                   const std::string& exec_provider) {
     Ort::SessionOptions opts;
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     (void)intra_threads;  // global pool sizing is set on the shared env
+    if (exec_provider == "cuda") {
+      // Raw C API on purpose: the C++ wrapper (Ort::OrtCUDAProviderOptions) is
+      // #ifdef'd out in CPU-package headers while the C struct and the
+      // AppendExecutionProvider_CUDA function are always declared. So this
+      // still compiles against the CPU package, and fails at session creation
+      // below if the running onnxruntime.dll has no CUDA support.
+      OrtCUDAProviderOptions cuda{};
+      cuda.device_id = 0;
+      // The classic Windows footgun is a silent fallback to CPU when cuDNN /
+      // cudart are missing or the wrong major version. Disable it: a CUDA
+      // request that cannot be satisfied becomes a hard error instead.
+      opts.AddConfigEntry(kOrtSessionOptionsDisableCPUEPFallback, "1");
+      Ort::ThrowOnError(
+          Ort::GetApi().SessionOptionsAppendExecutionProvider_CUDA(opts, &cuda));
+    } else if (exec_provider != "cpu") {
+      throw std::runtime_error("Unknown execution provider \"" +
+                               exec_provider + "\" (expected cpu or cuda)");
+    }
     try {
       // ORTCHAR_T is wchar_t on Windows / char on POSIX; std::filesystem::path
       // exposes the same native char width via c_str(), so the model path is
       // accepted on both without a manual wide-char conversion.
       return Ort::Session(env, std::filesystem::path(path).c_str(), opts);
     } catch (const Ort::Exception& e) {
-      throw std::runtime_error("Failed to load ONNX model " + path + ": " +
+      throw std::runtime_error("Failed to load ONNX model " + path +
+                               " (exec_provider=" + exec_provider + "): " +
                                e.what());
     }
   }
 };
 
-OnnxBackend::OnnxBackend(const std::string& onnx_path, int intra_threads)
-    : impl_(std::make_unique<Impl>(onnx_path, intra_threads)) {
+OnnxBackend::OnnxBackend(const std::string& onnx_path, int intra_threads,
+                         const std::string& exec_provider)
+    : impl_(std::make_unique<Impl>(onnx_path, intra_threads, exec_provider)) {
   if (impl_->input_dims.size() != 4 || impl_->input_dims[1] != 3) {
     throw std::runtime_error("Unexpected ONNX input shape for " + onnx_path);
   }
@@ -94,8 +119,8 @@ OnnxBackend::OnnxBackend(const std::string& onnx_path, int intra_threads)
              "names for %s",
              meta_.nc, onnx_path.c_str());
   }
-  LOG_INFO("Loaded %s (onnxruntime, %dx%d, nc=%d)", onnx_path.c_str(),
-           meta_.imgsz_w, meta_.imgsz_h, meta_.nc);
+  LOG_INFO("Loaded %s (onnxruntime/%s, %dx%d, nc=%d)", onnx_path.c_str(),
+           impl_->exec_provider.c_str(), meta_.imgsz_w, meta_.imgsz_h, meta_.nc);
 }
 
 OnnxBackend::~OnnxBackend() = default;
@@ -138,8 +163,10 @@ RawOutputs OnnxBackend::run(const cv::Mat& letterboxed_bgr) {
 std::unique_ptr<Yolo11Model> load_onnx_model(const std::string& onnx_path,
                                              float conf_thres,
                                              float iou_thres, int pad_value,
-                                             int intra_threads) {
-  auto backend = std::make_unique<OnnxBackend>(onnx_path, intra_threads);
+                                             int intra_threads,
+                                             const std::string& exec_provider) {
+  auto backend = std::make_unique<OnnxBackend>(onnx_path, intra_threads,
+                                               exec_provider);
   ModelMeta meta = backend->meta();
   return std::make_unique<Yolo11Model>(std::move(backend), std::move(meta),
                                        conf_thres, iou_thres, pad_value);
