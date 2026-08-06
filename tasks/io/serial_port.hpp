@@ -133,6 +133,11 @@ class SerialThread {
   // port_ is shared between the serial thread (poll/send/reopen) and status
   // readers (connected/is_start_active). Take a copy under port_mutex_,
   // use it unlocked — reopen() swaps the pointer under the same mutex.
+  //
+  // Lock order invariant (checked by architecture review): the inference
+  // workers in app.cpp may hold infer_mutex_ while acquiring port_mutex_ in
+  // the recognition-gate predicate. Never acquire infer_mutex_ while holding
+  // port_mutex_ — that would deadlock both inference workers.
   mutable std::mutex port_mutex_;
   std::shared_ptr<SerialPort> port_;
   int consecutive_failures_ = 0;

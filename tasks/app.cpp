@@ -280,10 +280,22 @@ void CompetitionApp::inference_worker(Channel ch) {
     cv::Mat frame;
     {
       std::unique_lock<std::mutex> lock(infer_mutex_);
-      infer_cv_.wait(lock, [&] {
-        return !running_ || !infer_pending_[idx].empty();
+      // Consume-side gate: frames are only fed into the model while the MCU
+      // keeps START alive (or DEBUG forces recognition). The capture threads
+      // keep refreshing the latest slot, so on START-on the worker picks up
+      // the freshest frame. The timed wait is a backstop: it re-checks the
+      // gate even when no capture notify arrives (e.g. START arriving while
+      // cameras are in failure backoff), decoupling START latency from the
+      // capture rate. MUST honour the return value: wait_for's predicate
+      // result, not the mere fact that it returned. On timeout with the gate
+      // closed the predicate is false and the pending frame must NOT be
+      // consumed (otherwise the gate is a no-op and standby still infers).
+      bool ready = infer_cv_.wait_for(lock, std::chrono::milliseconds(50), [&] {
+        return !running_ || (!infer_pending_[idx].empty() &&
+                             recognition_enabled());
       });
       if (!running_) return;
+      if (!ready) continue;
       frame = std::move(infer_pending_[idx]);
       infer_pending_[idx].release();
     }
@@ -297,7 +309,10 @@ void CompetitionApp::inference_worker(Channel ch) {
     }
     if (!running_) return;
 
-    // A camera confirmed offline must not merge stale detections.
+    // No publish-side gate: a predict that started while START was active may
+    // finish just after START dropped. Publishing it is intentional — it is
+    // the last valid result and becomes the sticky cached frame (TX is
+    // separately START-gated, so nothing transmits during standby).
     if (camera_capture_healthy(ch)) {
       std::lock_guard<std::mutex> lock(result_mutex_);
       latest_dets_[idx] = std::move(dets);
@@ -461,6 +476,29 @@ void CompetitionApp::stop() {
   infer_cv_.notify_all();
 }
 
+bool CompetitionApp::recognition_enabled() const {
+  if (debug_mode_.load(std::memory_order_relaxed)) return true;
+  // No usable serial backend (--no-serial dev mode, a port that failed to
+  // open at boot, or one sitting in a failed/reopening state): there is no
+  // START to gate on, so recognition always runs. This keeps
+  // `--mock-cameras --no-serial` a usable development loop and makes the
+  // boot-time and runtime serial failure modes behave identically (fail-open).
+  // A live port gates recognition on START; a healthy-but-quiet port means no
+  // recognition. TX stays separately START-gated, so nothing transmits while
+  // the MCU is not signalling.
+  if (!serial_ || !serial_->connected()) return true;
+  return serial_->is_start_active();
+}
+
+void CompetitionApp::set_debug_mode(bool on) {
+  bool changed = debug_mode_.exchange(on, std::memory_order_relaxed) != on;
+  if (changed) {
+    LOG_INFO("Debug mode %s (recognition %s)", on ? "enabled" : "disabled",
+             on ? "forced ON" : "gated by serial START");
+  }
+  infer_cv_.notify_all();  // re-evaluate the recognition gate immediately
+}
+
 // ── once / bench ───────────────────────────────────────────────────────
 
 int CompetitionApp::run_once() {
@@ -574,6 +612,8 @@ CompetitionApp::Status CompetitionApp::status() const {
   s.serial_present = serial_ != nullptr;
   s.serial_connected = serial_ && serial_->connected();
   s.start_active = serial_ && serial_->is_start_active();
+  s.debug_mode = debug_mode();
+  s.recognition_active = recognition_enabled();
   {
     std::lock_guard<std::mutex> lock(rate_mutex_);
     s.bean_infer_fps = rate_fps_[0];
@@ -721,6 +761,19 @@ bool CompetitionApp::render_view(Channel ch, cv::Mat& out) {
                 {255, 255, 255}, 1);
     return x + ts.width + 20;
   };
+  // Colored variant for DEBUG / REC chips (no ok/na semantics).
+  auto color_chip = [&](int x, const std::string& text,
+                        const cv::Scalar& bg) {
+    int baseline = 0;
+    cv::Size ts = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1,
+                                  &baseline);
+    int y = frame.rows - 10;
+    cv::rectangle(frame, {x, y - ts.height - 8}, {x + ts.width + 12, y + 4},
+                  bg, cv::FILLED);
+    cv::putText(frame, text, {x + 6, y - 4}, cv::FONT_HERSHEY_SIMPLEX, 0.5,
+                {255, 255, 255}, 1);
+    return x + ts.width + 20;
+  };
   int x = 8;
   x = chip(x, s.bean_online ? "BEAN: OK" : "BEAN: OFFLINE", s.bean_online,
            false);
@@ -735,6 +788,14 @@ bool CompetitionApp::render_view(Channel ch, cv::Mat& out) {
     x = chip(x, s.start_active ? "START: ON" : "START: OFF", s.start_active,
              false);
   }
+  if (s.debug_mode) {
+    // Orange: stands out from the green/red status chips.
+    x = color_chip(x, "DEBUG: ON", cv::Scalar(0, 128, 255));
+  }
+  // Live recognition-gate state (START/DEBUG/no-serial → ON).
+  x = color_chip(x, s.recognition_active ? "REC: ON" : "REC: OFF",
+                 s.recognition_active ? cv::Scalar(0, 102, 0)
+                                      : cv::Scalar(0, 0, 170));
 
   // Inference fps (top-right).
   char fps_text[64];

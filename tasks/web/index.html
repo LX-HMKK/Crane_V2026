@@ -37,6 +37,9 @@
   #save.saved { background: #060; }
   #save.error { background: #a00; }
   #exit { background: var(--red); }
+  #debug { background: var(--gray); }
+  #debug.active { background: #f80; }
+  .chip.warn { background: #f80; }
   #sliders { display: flex; flex-wrap: wrap; gap: 8px 22px; }
   .slider-row { display: flex; align-items: center; gap: 10px;
     min-width: 320px; flex: 1; }
@@ -58,6 +61,8 @@
       <span class="chip" id="st-digit">DIGIT</span>
       <span class="chip" id="st-serial">SERIAL</span>
       <span class="chip" id="st-start">START</span>
+      <span class="chip" id="st-debug">DEBUG</span>
+      <span class="chip" id="st-rec">REC</span>
     </div>
     <div id="fps">—</div>
   </div>
@@ -66,6 +71,7 @@
       <button id="tab-bean">BEAN (1)</button>
       <button id="tab-digit">DIGIT (2)</button>
       <button id="tab-settings">SETTINGS (3)</button>
+      <button id="debug">DEBUG</button>
       <button id="save">SAVE</button>
       <button id="exit">EXIT</button>
     </div>
@@ -78,6 +84,8 @@
   let fields = [];
   const video = document.getElementById('video');
   const slidersEl = document.getElementById('sliders');
+  const debugBtn = document.getElementById('debug');
+  const stDebug = document.getElementById('st-debug');
 
   function setStream() {
     video.src = '/stream.mjpeg?cam=' + (view === 'digit' ? 'digit' : 'bean')
@@ -156,10 +164,19 @@
       setChip('st-digit', 'DIGIT: ' + (s.digit === 'ok' ? 'OK' : 'OFFLINE'), s.digit);
       if (s.serial === 'na') {
         setChip('st-serial', 'SERIAL: N/A', 'na');
+        // No serial backend -> recognition already always-on (nothing to gate
+        // on), so the DEBUG override is meaningless; hide it.
+        debugBtn.style.display = 'none';
+        stDebug.style.display = 'none';
       } else {
+        debugBtn.style.display = '';
+        stDebug.style.display = '';
         setChip('st-serial', 'SERIAL: ' + (s.serial === 'ok' ? 'OK' : 'OFFLINE'), s.serial);
       }
       setChip('st-start', 'START: ' + (s.start ? 'ON' : 'OFF'), s.start ? 'ok' : 'off');
+      setChip('st-debug', 'DEBUG: ' + (s.debug ? 'ON' : 'OFF'), s.debug ? 'warn' : 'na');
+      setChip('st-rec', 'REC: ' + (s.recognition ? 'ON' : 'OFF'), s.recognition ? 'ok' : 'off');
+      setDebug(s.debug);
       document.getElementById('fps').textContent =
         'bean ' + s.bean_fps.toFixed(1) + ' fps | digit ' + s.digit_fps.toFixed(1) + ' fps'
         + (s.frame ? ' | ' + s.frame.join(' ') : '');
@@ -169,12 +186,23 @@
   function setChip(id, text, state) {
     const el = document.getElementById(id);
     el.textContent = text;
-    el.className = 'chip ' + (state === 'ok' ? 'ok' : state === 'na' || state === 'off' ? 'na' : 'err');
+    el.className = 'chip ' + (state === 'ok' ? 'ok' : state === 'warn' ? 'warn' : state === 'na' || state === 'off' ? 'na' : 'err');
+  }
+
+  function setDebug(on) {
+    debugBtn.classList.toggle('active', !!on);
   }
 
   document.getElementById('tab-bean').onclick = () => setView('bean');
   document.getElementById('tab-digit').onclick = () => setView('digit');
   document.getElementById('tab-settings').onclick = () => setView('settings');
+  debugBtn.onclick = async () => {
+    const next = !debugBtn.classList.contains('active');
+    try {
+      await fetch('/api/debug?mode=' + (next ? 1 : 0), { method: 'POST' });
+      debugBtn.classList.toggle('active', next);
+    } catch (e) { console.warn(e); }
+  };
   document.getElementById('save').onclick = async (ev) => {
     const btn = ev.target;
     try {

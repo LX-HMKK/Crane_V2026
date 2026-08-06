@@ -33,6 +33,14 @@ bash scripts/build_on_rdk.sh
 | `serial` | 帧编解码/校验、START 解析（分包/突发）、socketpair 回环 20 Hz 发送 |
 | `golden_onnx` | 静态图 detections 对拍 Python onnxruntime 参考值 + 端到端 payload |
 
+START 门控集成测试（需要串口，用 pty 伪造 UART）：
+
+```bash
+python3 scripts/test_start_gate.py   # 在 WSL 构建环境内运行，全程 ~40s
+```
+
+验证：无 START 不推理 → START 打开 → 停 START 关断（sticky 保留）→ DEBUG 强制 → DEBUG 关闭回门控。用 `/api/status` 的 `recognition` 字段作瞬时信号（fps 是 5s 速率窗口，不适合做门控断言）。
+
 `golden_onnx` 的容差（坐标 1.5px、置信度 0.005）是为吸收 OpenCV 4.5 vs 5.0 的 resize 亚像素差异，不要随意收紧。
 
 ## 运行
@@ -44,6 +52,8 @@ sudo ./build/crane_vision --backend bpu --web-port 8080
 # x86 全流程验证（mock 相机 + Web 校准 UI，无串口）
 ./build/crane_vision --mock-cameras --no-serial --web-port 8080
 # 浏览器打开 http://<host>:8080
+# 底部控制栏右侧 DEBUG 键：强制识别（绕过下位机 START），用于标定/调试；
+# 状态栏 REC:ON/OFF 实时显示识别门控是否打开。
 
 # 静态图片单次扫描（无需相机/串口，端到端冒烟）
 ./build/crane_vision --once --bean-image tests/data/beans_2.jpg \

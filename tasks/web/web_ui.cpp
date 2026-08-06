@@ -98,6 +98,8 @@ void WebUi::register_routes() {
                 [this](const auto& r) { return handle_get_config(r); });
   server_.route("POST", "/api/config",
                 [this](const auto& r) { return handle_set_config(r); });
+  server_.route("POST", "/api/debug",
+                [this](const auto& r) { return handle_debug(r); });
   server_.route("POST", "/api/save",
                 [this](const auto& r) { return handle_save(r); });
   server_.route("POST", "/api/exit",
@@ -127,6 +129,9 @@ HttpServer::Response WebUi::handle_status(const HttpServer::Request&) {
                           : (s.serial_connected ? "ok" : "offline")) +
           "\",";
   json += "\"start\":" + std::string(s.start_active ? "true" : "false") + ",";
+  json += "\"debug\":" + std::string(s.debug_mode ? "true" : "false") + ",";
+  json += "\"recognition\":" +
+          std::string(s.recognition_active ? "true" : "false") + ",";
   char buf[128];
   std::snprintf(buf, sizeof(buf), "\"bean_fps\":%.2f,\"digit_fps\":%.2f,",
                 s.bean_infer_fps, s.digit_infer_fps);
@@ -235,6 +240,23 @@ HttpServer::Response WebUi::handle_set_config(const HttpServer::Request& req) {
             std::string("bad value: ") + e.what()};
   }
   return {200, "application/json", "{\"ok\":true}"};
+}
+
+HttpServer::Response WebUi::handle_debug(const HttpServer::Request& req) {
+  auto params = req.query;
+  if (params.empty() && !req.body.empty()) params = parse_query(req.body);
+  bool on = true;
+  auto mit = params.find("mode");
+  if (mit != params.end()) {
+    on = !(mit->second == "0" || mit->second == "off" ||
+           mit->second == "false");
+  }
+  app_.set_debug_mode(on);
+  HttpServer::Response resp;
+  resp.content_type = "application/json";
+  resp.body = std::string(on ? "{\"ok\":true,\"debug\":true}"
+                             : "{\"ok\":true,\"debug\":false}");
+  return resp;
 }
 
 HttpServer::Response WebUi::handle_save(const HttpServer::Request&) {

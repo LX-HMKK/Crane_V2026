@@ -27,6 +27,7 @@ class WebUi {
   HttpServer::Response handle_status(const HttpServer::Request&);
   HttpServer::Response handle_get_config(const HttpServer::Request&);
   HttpServer::Response handle_set_config(const HttpServer::Request&);
+  HttpServer::Response handle_debug(const HttpServer::Request&);
   HttpServer::Response handle_save(const HttpServer::Request&);
   HttpServer::Response handle_exit(const HttpServer::Request&);
   void handle_mjpeg(int fd, const HttpServer::Request&);

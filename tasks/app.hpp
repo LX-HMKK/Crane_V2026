@@ -73,6 +73,9 @@ class CompetitionApp {
     bool serial_present = false;
     bool serial_connected = false;
     bool start_active = false;
+    bool debug_mode = false;
+    // Live recognition gate result: frames are being fed into the model.
+    bool recognition_active = false;
     double bean_infer_fps = 0;
     double digit_infer_fps = 0;
     std::optional<FramePayload> frame;
@@ -88,6 +91,14 @@ class CompetitionApp {
   void apply_runtime_overrides();  // push cfg → cameras/models
   void request_exit() { stop(); }
 
+  // Web DEBUG toggle: force recognition regardless of serial START.
+  // Standby semantics (start-gated recognition) are the default; DEBUG is a
+  // runtime switch only and is never persisted to vision.yaml.
+  void set_debug_mode(bool on);
+  bool debug_mode() const {
+    return debug_mode_.load(std::memory_order_relaxed);
+  }
+
  private:
   void open_devices();
   void load_models();
@@ -98,6 +109,9 @@ class CompetitionApp {
   void inference_worker(Channel ch);
   void submit_frame_for_inference(Channel ch, const cv::Mat& frame);
   bool camera_capture_healthy(Channel ch) const;
+  // Recognition gate: frames are fed to the model only while the MCU keeps
+  // START alive (or while DEBUG is forced, or when no serial backend exists).
+  bool recognition_enabled() const;
   void invalidate_camera_detections(Channel ch);
   void on_inference_done(Channel ch);
   void update_task_from_latest_detections();
@@ -111,6 +125,7 @@ class CompetitionApp {
   std::atomic<bool> running_{false};
   std::mutex infer_mutex_;
   std::condition_variable infer_cv_;
+  std::atomic<bool> debug_mode_{false};
 
   ICameraPtr cams_[kNumChannels];
   std::unique_ptr<Yolo11Model> models_[kNumChannels];
