@@ -1,5 +1,6 @@
 #pragma once
 
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -13,12 +14,12 @@ namespace crane {
 // and placement zones 4-8 (digit camera). NaN marks a missing/invalid value
 // (mirrors malformed-YAML handling in the Python _validate_lines).
 struct LinesConfig {
-  double bean_left_x = 0.0 / 0.0;
-  double bean_right_x = 0.0 / 0.0;
-  double digit_x1 = 0.0 / 0.0;
-  double digit_x2 = 0.0 / 0.0;
-  double digit_x3 = 0.0 / 0.0;
-  double digit_x4 = 0.0 / 0.0;
+  double bean_left_x = std::numeric_limits<double>::quiet_NaN();
+  double bean_right_x = std::numeric_limits<double>::quiet_NaN();
+  double digit_x1 = std::numeric_limits<double>::quiet_NaN();
+  double digit_x2 = std::numeric_limits<double>::quiet_NaN();
+  double digit_x3 = std::numeric_limits<double>::quiet_NaN();
+  double digit_x4 = std::numeric_limits<double>::quiet_NaN();
 };
 
 // Convert bean/digit detections into result-frame payloads.

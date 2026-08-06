@@ -8,6 +8,7 @@
 tasks/
   app.*              # 竞赛编排：采集×2 / 推理×2 / 任务合并 / 串口 / Web（根上唯一模块）
   common/            # types.hpp（Detection/FramePayload 等）+ logging.hpp + config.*
+                     # + sockets.hpp（跨平台 socket shim：Winsock/Berkeley 统一，net::Socket）
   io/
     camera.*         # ICamera / Camera(V4L2) / MockCamera / StaticImageCamera
     serial_port.*    # termios UART + 协议 + 后台线程
@@ -26,6 +27,16 @@ tasks/
 ```
 
 include 根是 `tasks/`：跨模块引用写全路径（`"io/camera.hpp"`），同目录内写短名（`"mapping.hpp"`）。
+
+## Windows 原生（开发验证）构建
+
+Windows 原生编译**仅做开发验证**（MSVC + `--mock-cameras --no-serial` 跑 ONNX 推理 + Web 校准 UI），消除 WSL2 的 2× 推理损耗与 localhost 每连接 200ms 开销。**部署目标仍是 RDK X5（Linux + BPU），Windows 上真实相机/串口不可用**：
+
+- `common/sockets.hpp`：跨平台 socket shim，把 Web 服务器用到的 Berkeley-socket 调用统一到 Winsock2（`net::Socket` = POSIX `int` / Windows `SOCKET` 64 位，**绝不截断成 int**）。消息标志用独立常量名（`kMsgNoSignal`/`kMsgDontWait`/`kShutRdwr`）——Linux 上 `MSG_NOSIGNAL` 等是宏，`net::MSG_NOSIGNAL` 会宏展开成 `net::0` 编译失败。`main()`/测试 main 里放一个 `net::Wsa wsa;`。
+- **串口**：`TermiosSerialIO` 全 `#ifndef _WIN32` 编译掉；Windows 上 `open_serial_io()` 抛错 → `app.cpp` try/catch → `serial_=nullptr` → recognition fail-open。`open_serial_io` 返回 `unique_ptr<ISerialIO>`（不是 `TermiosSerialIO`），否则 Windows 上 `for_device` 的临时量析构会强制发射未定义的 `close()`。`SerialPort`/`SerialThread` 协议层两平台原样编译。
+- **相机**：`Camera` 的 `v4l2-ctl` shell-out 与 `/dev/video*` 枚举 `#ifndef _WIN32` 屏蔽；`cv::CAP_V4L2` 只是枚举常量可编译。Windows 上真相机退化为离线占位（`fallback_empty` → 空 MockCamera），dev 路径用 `--mock-cameras`。
+- **其他**：`logging.hpp` 用 `localtime_s`；`main.cpp` 的 `SIGPIPE`（MSVC 未定义）加 `#ifndef _WIN32`；NaN 用 `std::numeric_limits<double>::quiet_NaN()`（`0.0/0.0` 是 MSVC C2124）；ORT 模型路径经 `std::filesystem::path`（`ORTCHAR_T` 在 Windows 是 `wchar_t`）。
+- 构建/依赖：`scripts/setup_deps_win.ps1` + `scripts/build_win.ps1`，生成器 `Visual Studio 18 2026`。详见 `docs/development.md`。
 
 ## 双推理后端
 

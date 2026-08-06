@@ -27,7 +27,11 @@ class Logger {
     char time_buf[16];
     std::time_t now = std::time(nullptr);
     std::tm tm_now;
+#ifdef _WIN32
+    localtime_s(&tm_now, &now);
+#else
     localtime_r(&now, &tm_now);
+#endif
     std::strftime(time_buf, sizeof(time_buf), "%H:%M:%S", &tm_now);
     static const char* kNames[] = {"DEBUG", "INFO", "WARNING", "ERROR"};
     std::fprintf(stdout, "%s [%s] ", time_buf, kNames[level]);

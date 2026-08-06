@@ -30,7 +30,7 @@ class WebUi {
   HttpServer::Response handle_debug(const HttpServer::Request&);
   HttpServer::Response handle_save(const HttpServer::Request&);
   HttpServer::Response handle_exit(const HttpServer::Request&);
-  void handle_mjpeg(int fd, const HttpServer::Request&);
+  void handle_mjpeg(net::Socket fd, const HttpServer::Request&);
 
   CompetitionApp& app_;
   HttpServer server_;

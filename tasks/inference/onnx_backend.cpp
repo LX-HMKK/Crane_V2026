@@ -1,6 +1,7 @@
 #include "inference/onnx_backend.hpp"
 
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 #include <onnxruntime_cxx_api.h>
@@ -55,7 +56,10 @@ struct OnnxBackend::Impl {
     opts.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
     (void)intra_threads;  // global pool sizing is set on the shared env
     try {
-      return Ort::Session(env, path.c_str(), opts);
+      // ORTCHAR_T is wchar_t on Windows / char on POSIX; std::filesystem::path
+      // exposes the same native char width via c_str(), so the model path is
+      // accepted on both without a manual wide-char conversion.
+      return Ort::Session(env, std::filesystem::path(path).c_str(), opts);
     } catch (const Ort::Exception& e) {
       throw std::runtime_error("Failed to load ONNX model " + path + ": " +
                                e.what());

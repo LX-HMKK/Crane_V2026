@@ -51,10 +51,15 @@ class TermiosSerialIO : public ISerialIO {
   double timeout_sec_;
 };
 
-// Open a UART and wrap it in TermiosSerialIO (throws on failure).
-std::unique_ptr<TermiosSerialIO> open_serial_io(const std::string& device,
-                                                int baudrate,
-                                                double timeout_sec = 0.05);
+// Open a UART and wrap it in an ISerialIO (throws on failure). On Windows
+// this always throws — the dev-verification build runs with --no-serial, and
+// the real COM-port backend lives only on the RDK X5 Linux board. Returns
+// ISerialIO (not TermiosSerialIO) so SerialThread::for_device's temporary
+// never forces the never-defined TermiosSerialIO::close() to be emitted on
+// Windows.
+std::unique_ptr<ISerialIO> open_serial_io(const std::string& device,
+                                          int baudrate,
+                                          double timeout_sec = 0.05);
 
 // ── protocol layer (mirrors models/serial_port.py SerialPort) ──────────
 class SerialPort {

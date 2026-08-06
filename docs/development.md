@@ -18,6 +18,9 @@ ctest --test-dir build --output-on-failure
 # 等价一键脚本（内部 cd 项目根）
 bash scripts/build_wsl.sh
 
+# Windows 原生（开发验证，见下文"Windows 原生构建"）
+powershell -ExecutionPolicy Bypass -File scripts/build_win.ps1
+
 # 单个测试
 ctest --test-dir build -R logic          # logic / serial / golden_onnx
 
@@ -84,6 +87,24 @@ bash scripts/wsl_run.sh <cmd>           # WSL 内跑二进制：cd 项目根 + �
 - WSL 继承 Windows 侧 cwd，且容易卡在子目录——WSL 命令一律用绝对路径。
 - 无 sudo 可用（密码未知），不要尝试需要 root 的安装路径。
 - WSL2 推理耗时约为 Windows 原生 2 倍（ORT ~35ms vs ~20ms），性能对比必须同环境背靠背，WSL2 数字仅供参考。
+
+## Windows 原生构建（开发验证）
+
+本机 Windows 编译消除 WSL2 损耗（推理 ~29ms vs WSL2 ~35ms，且无 localhost 每连接 200ms）。**仅开发验证**：mock 相机 + 无串口 + ONNX + Web UI；真实 V4L2 相机 / COM 串口 / BPU 只在 RDK X5 上有。
+
+```powershell
+# 依赖：ORT win zip → tools/onnxruntime-win、OpenCV 4.12 预编译 → tools/opencv、
+#       yaml-cpp 0.7.0 源码一次构建 → tools/yaml-cpp（幂等，跳过已存在项）
+powershell -ExecutionPolicy Bypass -File scripts/setup_deps_win.ps1
+
+# 构建 + ctest 3/3 + --once 冒烟 + Web UI 冒烟
+powershell -ExecutionPolicy Bypass -File scripts/build_win.ps1
+```
+
+- 工具链：MSVC BuildTools 18（vs 2026）+ CMake ≥ 4.4，生成器 `Visual Studio 18 2026`（免 vcvars64）。脚本也会回退 Ninja + vcvars64。
+- OpenCV_DIR 指向 **`x64\vcXX\lib`**（顶层 `OpenCVConfig.cmake` 不认 MSVC 14.50，会 OpenCV_FOUND=FALSE）。vc16 导入库与新版 MSVC ABI 兼容。
+- 运行时 DLL：`onnxruntime.dll`（win zip 里在 `lib/` 无 `bin/`）由 POST_BUILD 拷到 exe 旁；OpenCV `opencv_world4120.dll` 与 ORT DLL 靠脚本里设置的 PATH。
+- ctest：`logic`/`serial`/`golden_onnx` 3/3。`test_start_gate.py` 仍需 WSL（pty 伪串口）；Windows 串口覆盖仅 `test_serial`（loopback TCP 代替 socketpair）。
 
 ## RDK X5 部署
 

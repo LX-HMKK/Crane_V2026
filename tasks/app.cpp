@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <limits>
 #include <numeric>
 #include <thread>
 
@@ -35,7 +36,9 @@ constexpr double kResultFailureLogIntervalSec = 5.0;
 constexpr double kInferenceRateWindowSec = 5.0;
 
 LinesConfig lines_from_cfg(const VisionConfig& cfg) {
-  const double nan = 0.0 / 0.0;
+  // 0.0/0.0 (NaN) is a C2124 constant-expression error under MSVC; use the
+  // standard quiet_NaN() so the same value is portable.
+  const double nan = std::numeric_limits<double>::quiet_NaN();
   LinesConfig l;
   l.bean_left_x = cfg.get<double>({"lines", "bean", "left_x"}, nan);
   l.bean_right_x = cfg.get<double>({"lines", "bean", "right_x"}, nan);

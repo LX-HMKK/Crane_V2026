@@ -8,12 +8,6 @@
 #include <stdexcept>
 #include <thread>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include "common/logging.hpp"
 
 namespace crane {
@@ -79,35 +73,38 @@ void HttpServer::route_stream(const std::string& method,
 }
 
 void HttpServer::start() {
-  listen_fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
-  if (listen_fd_ < 0) {
-    throw std::runtime_error("http server: socket() failed");
+  listen_fd_ = net::socket(AF_INET, SOCK_STREAM, 0);
+  if (listen_fd_ == net::kInvalidSocket) {
+    throw std::runtime_error("http server: socket() failed: " +
+                             net::error_message(errno));
   }
   int one = 1;
-  setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+  net::setsockopt(listen_fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
 
   sockaddr_in addr{};
   addr.sin_family = AF_INET;
   addr.sin_port = htons(static_cast<uint16_t>(port_));
   if (listen_addr_.empty() || listen_addr_ == "0.0.0.0") {
     addr.sin_addr.s_addr = INADDR_ANY;
-  } else if (::inet_pton(AF_INET, listen_addr_.c_str(), &addr.sin_addr) != 1) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  } else if (net::inet_pton(AF_INET, listen_addr_.c_str(), &addr.sin_addr) !=
+             1) {
+    net::close(listen_fd_);
+    listen_fd_ = net::kInvalidSocket;
     throw std::runtime_error("http server: bad listen addr " + listen_addr_);
   }
-  if (::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) <
+  if (net::bind(listen_fd_, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) <
       0) {
     int e = errno;
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+    net::close(listen_fd_);
+    listen_fd_ = net::kInvalidSocket;
     throw std::runtime_error("http server: bind() failed: " +
-                             std::string(std::strerror(e)));
+                             net::error_message(e));
   }
-  if (::listen(listen_fd_, 16) < 0) {
-    ::close(listen_fd_);
-    listen_fd_ = -1;
-    throw std::runtime_error("http server: listen() failed");
+  if (net::listen(listen_fd_, 16) < 0) {
+    net::close(listen_fd_);
+    listen_fd_ = net::kInvalidSocket;
+    throw std::runtime_error("http server: listen() failed: " +
+                             net::error_message(errno));
   }
   running_ = true;
   accept_thread_ = std::thread(&HttpServer::accept_loop, this);
@@ -117,24 +114,24 @@ void HttpServer::start() {
 
 void HttpServer::stop() {
   running_ = false;
-  if (listen_fd_ >= 0) {
-    ::shutdown(listen_fd_, SHUT_RDWR);
-    ::close(listen_fd_);
-    listen_fd_ = -1;
+  if (listen_fd_ != net::kInvalidSocket) {
+    net::shutdown(listen_fd_, net::kShutRdwr);
+    net::close(listen_fd_);
+    listen_fd_ = net::kInvalidSocket;
   }
   if (accept_thread_.joinable()) accept_thread_.join();
   // Shut down all live connections so streaming handlers (MJPEG) fail their
   // next send and exit, then wait for connection threads to drain.
   {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    for (int fd : conn_fds_) ::shutdown(fd, SHUT_RDWR);
+    for (net::Socket fd : conn_fds_) net::shutdown(fd, net::kShutRdwr);
   }
   for (int i = 0; i < 100 && active_conns_ > 0; ++i) {
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   }
   {
     std::lock_guard<std::mutex> lock(conn_mutex_);
-    for (int fd : conn_fds_) ::close(fd);
+    for (net::Socket fd : conn_fds_) net::close(fd);
     conn_fds_.clear();
   }
 }
@@ -142,9 +139,10 @@ void HttpServer::stop() {
 void HttpServer::accept_loop() {
   while (running_) {
     sockaddr_in client{};
-    socklen_t len = sizeof(client);
-    int fd = ::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &len);
-    if (fd < 0) {
+    int len = sizeof(client);
+    net::Socket fd =
+        net::accept(listen_fd_, reinterpret_cast<sockaddr*>(&client), &len);
+    if (fd == net::kInvalidSocket) {
       if (!running_) return;
       if (errno == EINTR) continue;
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -155,7 +153,7 @@ void HttpServer::accept_loop() {
     // WSL2 is the localhost NAT's per-CONNECTION cost, fixed by keep-alive in
     // handle_connection() — TCP_NODELAY alone does not fix that case.
     int one = 1;
-    setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+    net::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
     {
       std::lock_guard<std::mutex> lock(conn_mutex_);
       conn_fds_.insert(fd);
@@ -167,10 +165,10 @@ void HttpServer::accept_loop() {
 
 namespace {
 
-bool send_all(int fd, const char* data, size_t n) {
+bool send_all(net::Socket fd, const char* data, size_t n) {
   size_t sent = 0;
   while (sent < n) {
-    ssize_t rc = ::send(fd, data + sent, n - sent, MSG_NOSIGNAL);
+    net::ssize_t rc = net::send(fd, data + sent, n - sent, net::kMsgNoSignal);
     if (rc < 0) {
       if (errno == EINTR) continue;
       return false;
@@ -182,20 +180,20 @@ bool send_all(int fd, const char* data, size_t n) {
 
 }  // namespace
 
-void HttpServer::handle_connection(int fd) {
+void HttpServer::handle_connection(net::Socket fd) {
   // RAII: always deregister on exit so stop() can drain cleanly. The guard
   // closes the fd only if it was still registered (stop() may have closed
   // it while draining).
   struct ConnGuard {
     HttpServer* srv;
-    int fd;
+    net::Socket fd;
     ~ConnGuard() {
       bool should_close;
       {
         std::lock_guard<std::mutex> lock(srv->conn_mutex_);
         should_close = srv->conn_fds_.erase(fd) > 0;
       }
-      if (should_close) ::close(fd);
+      if (should_close) net::close(fd);
       --srv->active_conns_;
     }
   } guard{this, fd};
@@ -219,14 +217,14 @@ void HttpServer::handle_connection(int fd) {
   }
 }
 
-bool HttpServer::handle_one_request(int fd, std::string& buf) {
+bool HttpServer::handle_one_request(net::Socket fd, std::string& buf) {
   // Read until a full header block is buffered (partial reads persist across
   // keep-alive iterations).
   size_t header_end = std::string::npos;
   while ((header_end = buf.find("\r\n\r\n")) == std::string::npos) {
     if (buf.size() >= 65536) return false;  // oversize
     char tmp[4096];
-    ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+    net::ssize_t n = net::recv(fd, tmp, sizeof(tmp), 0);
     if (n <= 0) return false;  // EOF / error / fd shut down
     buf.append(tmp, static_cast<size_t>(n));
   }
@@ -273,7 +271,7 @@ bool HttpServer::handle_one_request(int fd, std::string& buf) {
     while (buf.size() < consumed + want) {
       if (buf.size() >= 65536) return false;  // oversize
       char tmp[4096];
-      ssize_t n = ::recv(fd, tmp, sizeof(tmp), 0);
+      net::ssize_t n = net::recv(fd, tmp, sizeof(tmp), 0);
       if (n <= 0) return false;
       buf.append(tmp, static_cast<size_t>(n));
     }
@@ -334,7 +332,7 @@ bool HttpServer::handle_one_request(int fd, std::string& buf) {
                      "\r\nAccess-Control-Allow-Origin: *\r\n\r\n";
   send_all(fd, head.data(), head.size());
   if (!resp.body.empty()) send_all(fd, resp.body.data(), resp.body.size());
-  if (!keep_alive) ::shutdown(fd, SHUT_RDWR);
+  if (!keep_alive) net::shutdown(fd, net::kShutRdwr);
   return keep_alive;
 }
 

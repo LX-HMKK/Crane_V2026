@@ -1,12 +1,10 @@
 #include "web/web_ui.hpp"
 
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <thread>
-
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -40,10 +38,10 @@ std::string json_escape(const std::string& s) {
   return out;
 }
 
-bool send_all(int fd, const char* data, size_t n) {
+bool send_all(net::Socket fd, const char* data, size_t n) {
   size_t sent = 0;
   while (sent < n) {
-    ssize_t rc = ::send(fd, data + sent, n - sent, MSG_NOSIGNAL);
+    net::ssize_t rc = net::send(fd, data + sent, n - sent, net::kMsgNoSignal);
     if (rc < 0) {
       if (errno == EINTR) continue;
       return false;
@@ -110,7 +108,9 @@ void WebUi::register_routes() {
   server_.route("POST", "/api/exit",
                 [this](const auto& r) { return handle_exit(r); });
   server_.route_stream("GET", "/stream.mjpeg",
-                       [this](int fd, const auto& r) { handle_mjpeg(fd, r); });
+                       [this](net::Socket fd, const auto& r) {
+                         handle_mjpeg(fd, r);
+                       });
 }
 
 // ── handlers ──────────────────────────────────────────────────────────
@@ -286,7 +286,7 @@ HttpServer::Response WebUi::handle_exit(const HttpServer::Request&) {
   return {200, "application/json", "{\"ok\":true}"};
 }
 
-void WebUi::handle_mjpeg(int fd, const HttpServer::Request& req) {
+void WebUi::handle_mjpeg(net::Socket fd, const HttpServer::Request& req) {
   Channel ch = Channel::kBean;
   auto it = req.query.find("cam");
   if (it != req.query.end() && it->second == "digit") ch = Channel::kDigit;

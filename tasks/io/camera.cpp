@@ -1,7 +1,10 @@
 #include "camera.hpp"
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 #include <opencv2/imgcodecs.hpp>
@@ -118,6 +121,9 @@ bool Camera::set_exposure(double value) {
 }
 
 bool Camera::set_v4l2_control(const std::string& name, int value) {
+#ifndef _WIN32
+  // v4l2-ctl + `command -v` are POSIX-only; on Windows the OpenCV
+  // CAP_PROP_* fallback in the callers handles exposure control instead.
   if (device_.empty() || device_.rfind("/dev/", 0) != 0) return false;
   std::string cmd = "command -v v4l2-ctl >/dev/null 2>&1 && v4l2-ctl -d '" +
                     device_ + "' --set-ctrl " + name + "=" +
@@ -129,6 +135,11 @@ bool Camera::set_v4l2_control(const std::string& name, int value) {
     return false;
   }
   return true;
+#else
+  (void)name;
+  (void)value;
+  return false;
+#endif
 }
 
 bool Camera::capture(cv::Mat& out) {
@@ -332,6 +343,7 @@ ICameraPtr open_camera(const VisionConfig& cfg, const std::string& name,
 
 void list_cameras() {
   std::printf("Available cameras:\n");
+#ifndef _WIN32
   for (int i = 0; i < 10; ++i) {
     cv::VideoCapture cap(i, cv::CAP_V4L2);
     if (cap.isOpened()) {
@@ -341,6 +353,9 @@ void list_cameras() {
       cap.release();
     }
   }
+#else
+  std::printf("  (no V4L2 on Windows; use --mock-cameras)\n");
+#endif
 }
 
 }  // namespace crane

@@ -8,11 +8,13 @@
 #include <stdexcept>
 #include <system_error>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/select.h>
 #include <termios.h>
 #include <unistd.h>
+#endif
 
 #include "common/logging.hpp"
 
@@ -30,6 +32,7 @@ void throw_errno(const char* what) {
   throw std::system_error(errno, std::generic_category(), what);
 }
 
+#ifndef _WIN32
 speed_t baud_to_speed(int baudrate) {
   switch (baudrate) {
 #ifdef B921600
@@ -57,10 +60,16 @@ speed_t baud_to_speed(int baudrate) {
                                   std::to_string(baudrate));
   }
 }
+#endif
 
 }  // namespace
 
 // ── TermiosSerialIO ───────────────────────────────────────────────────────
+// termios is POSIX-only. The Windows dev-verification build never touches a
+// real UART (open_serial_io throws below, and the app runs with --no-serial),
+// so the whole backend is compiled out on Windows.
+
+#ifndef _WIN32
 
 TermiosSerialIO::TermiosSerialIO(const std::string& device, int baudrate,
                                  double timeout_sec)
@@ -160,11 +169,23 @@ void TermiosSerialIO::close() {
   }
 }
 
-std::unique_ptr<TermiosSerialIO> open_serial_io(const std::string& device,
-                                                int baudrate,
-                                                double timeout_sec) {
+std::unique_ptr<ISerialIO> open_serial_io(const std::string& device,
+                                          int baudrate, double timeout_sec) {
   return std::make_unique<TermiosSerialIO>(device, baudrate, timeout_sec);
 }
+
+#else  // _WIN32
+
+std::unique_ptr<ISerialIO> open_serial_io(const std::string& device,
+                                          int baudrate, double timeout_sec) {
+  (void)device;
+  (void)baudrate;
+  (void)timeout_sec;
+  throw std::runtime_error(
+      "Real serial ports are not supported on Windows; run with --no-serial");
+}
+
+#endif  // _WIN32
 
 // ── SerialPort ────────────────────────────────────────────────────────────
 

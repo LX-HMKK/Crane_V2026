@@ -5,18 +5,33 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_C_STANDARD 11)
 
-if(NOT CMAKE_BUILD_TYPE)
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
-set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+if(MSVC)
+  # -O3 is a hard error for cl.exe; /utf-8 keeps the Chinese comments and
+  # embedded strings warning-free, and NOMINMAX stops windows.h's min/max
+  # macros from breaking std::min/std::max in app.cpp/web_ui.cpp/camera.cpp.
+  set(CMAKE_CXX_FLAGS_RELEASE "/O2 /DNDEBUG")
+  set(CMAKE_C_FLAGS_RELEASE "/O2 /DNDEBUG")
+  add_compile_options(/utf-8)
+  add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN)
+else()
+  set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG")
+  set(CMAKE_C_FLAGS_RELEASE "-O3 -DNDEBUG")
+endif()
 
 # ── options ───────────────────────────────────────────────────────────
 option(CRANE_WITH_ONNXRUNTIME "Build ONNX Runtime inference backend" ON)
 option(CRANE_WITH_BPU "Build RDK X5 BPU (libDNN) inference backend" ON)
 option(CRANE_BUILD_TESTS "Build tests" ON)
-set(ONNXRUNTIME_ROOT "${CMAKE_SOURCE_DIR}/tools/onnxruntime" CACHE PATH
+if(WIN32)
+  set(_ORT_DEFAULT "${CMAKE_SOURCE_DIR}/tools/onnxruntime-win")
+else()
+  set(_ORT_DEFAULT "${CMAKE_SOURCE_DIR}/tools/onnxruntime")
+endif()
+set(ONNXRUNTIME_ROOT "${_ORT_DEFAULT}" CACHE PATH
     "Root of a prebuilt ONNX Runtime package (include/ + lib/)")
 
 # Real libDNN only exists on the RDK X5 (aarch64 system image). On any other
@@ -113,14 +128,31 @@ if(CRANE_WITH_BPU)
   endif()
 endif()
 
+if(CRANE_WITH_ONNXRUNTIME AND WIN32)
+  # Winsock (used by the web server + test_serial) links via crane_core PUBLIC
+  # so every target that touches sockets gets it transitively.
+  target_link_libraries(crane_core PUBLIC ws2_32)
+  # The Windows ORT zip ships onnxruntime.dll under lib/ (no bin/). Copy it
+  # next to the exe; the test exes additionally get the DLL via PATH in
+  # build_win.ps1, and test_golden_onnx gets its own POST_BUILD below.
+  find_file(ONNXRUNTIME_DLL onnxruntime.dll PATHS "${ONNXRUNTIME_ROOT}/lib"
+            NO_DEFAULT_PATH)
+endif()
+
 # ── main binary ───────────────────────────────────────────────────────
 add_executable(crane_vision src/main.cpp)
 target_link_libraries(crane_vision PRIVATE crane_core)
 if(CRANE_WITH_ONNXRUNTIME)
   # keep the ORT shared library reachable from the binary dir
-  add_custom_command(TARGET crane_vision POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${ONNXRUNTIME_LIB}" "$<TARGET_FILE_DIR:crane_vision>")
+  if(WIN32)
+    add_custom_command(TARGET crane_vision POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:crane_vision>")
+  else()
+    add_custom_command(TARGET crane_vision POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              "${ONNXRUNTIME_LIB}" "$<TARGET_FILE_DIR:crane_vision>")
+  endif()
 endif()
 
 # ── tests ─────────────────────────────────────────────────────────────
@@ -139,5 +171,11 @@ if(CRANE_BUILD_TESTS)
     target_link_libraries(test_golden_onnx PRIVATE crane_core)
     add_test(NAME golden_onnx COMMAND test_golden_onnx
              WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    if(WIN32)
+      # ctest runs the exe directly, so it needs onnxruntime.dll beside it.
+      add_custom_command(TARGET test_golden_onnx POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${ONNXRUNTIME_DLL}" "$<TARGET_FILE_DIR:test_golden_onnx>")
+    endif()
   endif()
 endif()

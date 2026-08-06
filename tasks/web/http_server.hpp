@@ -9,11 +9,13 @@
 #include <thread>
 #include <vector>
 
+#include "common/sockets.hpp"
+
 namespace crane {
 
-// Minimal embedded HTTP/1.0 server (POSIX sockets, thread per connection).
-// Just enough for the calibration web UI: static responses, JSON APIs and
-// MJPEG streaming. No external dependencies.
+// Minimal embedded HTTP/1.0 server (cross-platform sockets, thread per
+// connection). Just enough for the calibration web UI: static responses,
+// JSON APIs and MJPEG streaming. No external dependencies.
 //
 // Lifecycle: stop() shuts down the listen socket AND every tracked client
 // connection, then waits for connection threads to drain, so streaming
@@ -37,7 +39,7 @@ class HttpServer {
   using Handler = std::function<Response(const Request&)>;
   // Streaming handler: writes the full response itself (headers included).
   // Must periodically check `server_running()` (or send failure) and return.
-  using StreamHandler = std::function<void(int fd, const Request&)>;
+  using StreamHandler = std::function<void(net::Socket fd, const Request&)>;
 
   HttpServer(std::string listen_addr, int port);
   ~HttpServer();
@@ -54,21 +56,21 @@ class HttpServer {
 
  private:
   void accept_loop();
-  void handle_connection(int fd);  // exception-safe wrapper
+  void handle_connection(net::Socket fd);  // exception-safe wrapper
   // Read + dispatch one request from the connection buffer. Returns false when
   // the connection must close (client Connection: close, stream route done,
   // malformed request, read error, or server stopping).
-  bool handle_one_request(int fd, std::string& buf);
+  bool handle_one_request(net::Socket fd, std::string& buf);
 
   std::string listen_addr_;
   int port_;
-  int listen_fd_ = -1;
+  net::Socket listen_fd_ = net::kInvalidSocket;
   std::atomic<bool> running_{false};
   std::thread accept_thread_;
 
   // Live client connections, drained on stop().
   std::mutex conn_mutex_;
-  std::set<int> conn_fds_;
+  std::set<net::Socket> conn_fds_;
   std::atomic<int> active_conns_{0};
 
   std::map<std::string, Handler> handlers_;

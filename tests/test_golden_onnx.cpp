@@ -8,6 +8,7 @@
 // 4.5.4 (WSL2 apt, used here) and 5.0 (pip, used for the reference):
 // sub-pixel coordinate shifts and ~0.2% confidence wobble, which cannot
 // affect zone assignment (zones are ≥250 px wide).
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>

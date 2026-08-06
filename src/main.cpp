@@ -4,6 +4,7 @@
 #include <atomic>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <thread>
@@ -11,6 +12,7 @@
 #include "app.hpp"
 #include "io/camera.hpp"
 #include "common/logging.hpp"
+#include "common/sockets.hpp"
 
 namespace {
 
@@ -46,6 +48,7 @@ void print_usage(const char* argv0) {
 }  // namespace
 
 int main(int argc, char** argv) {
+  crane::net::Wsa wsa;  // no-op on POSIX; required before any socket call
   crane::AppOptions opts;
   std::string config_path = "configs/vision.yaml";
   std::string backend = "auto";
@@ -131,7 +134,9 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, on_signal);
     std::signal(SIGTERM, on_signal);
-    std::signal(SIGPIPE, SIG_IGN);
+#ifndef _WIN32
+    std::signal(SIGPIPE, SIG_IGN);  // SIGPIPE is undefined on MSVC
+#endif
 
     // Watchdog-style runner: run() blocks until stop() (signal or web EXIT).
     std::thread watcher([&] {

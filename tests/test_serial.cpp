@@ -1,5 +1,7 @@
 // Serial protocol tests, ported from crane/tools/crane_tests/test_serial.py.
-// Uses socketpair loopback instead of pyserial's loop:// URL.
+// Uses a loopback byte-pipe (socketpair on POSIX, loopback TCP on Windows)
+// instead of pyserial's loop:// URL.
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -10,9 +12,7 @@
 #include <thread>
 #include <vector>
 
-#include <sys/socket.h>
-#include <unistd.h>
-
+#include "common/sockets.hpp"
 #include "io/serial_port.hpp"
 
 namespace {
@@ -31,49 +31,90 @@ int g_pass = 0, g_fail = 0;
     }                                                 \
   } while (0)
 
-// Loopback IO over one end of a socketpair; the test drives the other end.
+// Loopback byte-pipe between two ends of a socket pair. POSIX uses
+// socketpair(AF_UNIX); Windows has no AF_UNIX socketpair, so we build an
+// ephemeral loopback TCP pair instead and set both ends non-blocking (recv
+// with flags=0 on a blocking Winsock socket would block, and the test relies
+// on MSG_DONTWAIT-style non-blocking semantics).
+void make_byte_pair(crane::net::Socket out[2]) {
+#ifdef _WIN32
+  crane::net::Socket listener = crane::net::socket(AF_INET, SOCK_STREAM, 0);
+  sockaddr_in addr{};
+  addr.sin_family = AF_INET;
+  addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  addr.sin_port = 0;  // ephemeral
+  if (crane::net::bind(listener, reinterpret_cast<sockaddr*>(&addr),
+                       sizeof(addr)) != 0 ||
+      crane::net::listen(listener, 1) != 0) {
+    crane::net::close(listener);
+    throw std::runtime_error("byte pair: bind/listen failed");
+  }
+  int len = sizeof(addr);
+  crane::net::getsockname(listener, reinterpret_cast<sockaddr*>(&addr), &len);
+  crane::net::Socket client = crane::net::socket(AF_INET, SOCK_STREAM, 0);
+  // connect from a helper thread so accept() can run and complete the pair.
+  std::thread connector([&] {
+    crane::net::connect(client, reinterpret_cast<sockaddr*>(&addr), len);
+  });
+  out[0] = crane::net::accept(listener, nullptr, nullptr);
+  connector.join();
+  out[1] = client;
+  crane::net::close(listener);
+  crane::net::set_nonblocking(out[0], true);
+  crane::net::set_nonblocking(out[1], true);
+#else
+  int fds[2];
+  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
+    throw std::runtime_error("socketpair failed");
+  }
+  out[0] = fds[0];
+  out[1] = fds[1];
+#endif
+}
+
+// Loopback IO over one end of a byte-pipe; the test drives the other end.
 class LoopbackIO : public crane::ISerialIO {
  public:
-  explicit LoopbackIO(int fd) : fd_(fd) {}
+  explicit LoopbackIO(crane::net::Socket fd) : fd_(fd) {}
   ~LoopbackIO() override { close(); }
 
   std::vector<uint8_t> read_available() override {
     std::vector<uint8_t> out(256);
-    ssize_t n = ::recv(fd_, out.data(), out.size(), MSG_DONTWAIT);
+    crane::net::ssize_t n =
+        crane::net::recv(fd_, out.data(), out.size(), crane::net::kMsgDontWait);
     if (n <= 0) return {};
     out.resize(static_cast<size_t>(n));
     return out;
   }
   size_t write_some(const uint8_t* data, size_t n) override {
-    ssize_t rc = ::send(fd_, data, n, MSG_NOSIGNAL);
+    crane::net::ssize_t rc =
+        crane::net::send(fd_, data, n, crane::net::kMsgNoSignal);
     return rc < 0 ? 0 : static_cast<size_t>(rc);
   }
   void close() override {
-    if (fd_ >= 0) {
-      ::close(fd_);
-      fd_ = -1;
+    if (fd_ != crane::net::kInvalidSocket) {
+      crane::net::close(fd_);
+      fd_ = crane::net::kInvalidSocket;
     }
   }
 
  private:
-  int fd_;
+  crane::net::Socket fd_;
 };
 
 struct Loop {
-  int fds[2];
+  crane::net::Socket fds[2];
   std::unique_ptr<crane::SerialPort> port;
 
   Loop() {
-    if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
-      throw std::runtime_error("socketpair failed");
-    }
+    make_byte_pair(fds);
     port = std::make_unique<crane::SerialPort>(
         std::make_unique<LoopbackIO>(fds[0]));
   }
-  ~Loop() { ::close(fds[1]); }
+  ~Loop() { crane::net::close(fds[1]); }
 
   void write(const std::vector<uint8_t>& data) {
-    ::send(fds[1], data.data(), data.size(), MSG_NOSIGNAL);
+    crane::net::send(fds[1], data.data(), data.size(), crane::net::kMsgNoSignal);
   }
   std::vector<uint8_t> read(size_t n, int timeout_ms = 500) {
     std::vector<uint8_t> out;
@@ -82,8 +123,9 @@ struct Loop {
                     std::chrono::milliseconds(timeout_ms);
     while (out.size() < n && std::chrono::steady_clock::now() < deadline) {
       uint8_t buf[64];
-      ssize_t rc = ::recv(fds[1], buf, std::min(sizeof(buf), n - out.size()),
-                          MSG_DONTWAIT);
+      crane::net::ssize_t rc =
+          crane::net::recv(fds[1], buf, std::min(sizeof(buf), n - out.size()),
+                           crane::net::kMsgDontWait);
       if (rc > 0) {
         out.insert(out.end(), buf, buf + rc);
       } else {
@@ -200,11 +242,8 @@ void test_send_result_writes_correct_frame() {
 }
 
 void test_serial_thread_sends_at_interval_when_start_active() {
-  int fds[2];
-  if (::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) {
-    CHECK(false, "socketpair failed");
-    return;
-  }
+  crane::net::Socket fds[2];
+  make_byte_pair(fds);
   crane::SerialIOFactory factory = [fd = fds[0]]() {
     return std::make_unique<LoopbackIO>(fd);
   };
@@ -217,7 +256,8 @@ void test_serial_thread_sends_at_interval_when_start_active() {
   std::atomic<bool> drive{true};
   std::thread heartbeat([&] {
     while (drive) {
-      ::send(fds[1], kStart.data(), kStart.size(), MSG_NOSIGNAL);
+      crane::net::send(fds[1], kStart.data(), kStart.size(),
+                       crane::net::kMsgNoSignal);
       std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   });
@@ -229,13 +269,14 @@ void test_serial_thread_sends_at_interval_when_start_active() {
   auto got = [&] {
     std::vector<uint8_t> out;
     uint8_t buf[256];
-    ssize_t n;
-    while ((n = ::recv(fds[1], buf, sizeof(buf), MSG_DONTWAIT)) > 0) {
+    crane::net::ssize_t n;
+    while ((n = crane::net::recv(fds[1], buf, sizeof(buf),
+                                 crane::net::kMsgDontWait)) > 0) {
       out.insert(out.end(), buf, buf + n);
     }
     return out;
   }();
-  ::close(fds[1]);
+  crane::net::close(fds[1]);
 
   // Expect roughly 400ms/50ms ≈ 8 frames (tolerance for scheduling).
   size_t frames = got.size() / 12;
@@ -255,6 +296,7 @@ void test_serial_thread_sends_at_interval_when_start_active() {
 }  // namespace
 
 int main() {
+  crane::net::Wsa wsa;  // no-op on POSIX; required before any socket call
   test_encode_frame_valid();
   test_encode_frame_rejects_duplicate_colors();
   test_encode_frame_rejects_duplicate_digits();
