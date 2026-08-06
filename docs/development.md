@@ -36,7 +36,7 @@ bash scripts/build_on_rdk.sh
 START 门控集成测试（需要串口，用 pty 伪造 UART）：
 
 ```bash
-python3 scripts/test_start_gate.py   # 在 WSL 构建环境内运行，全程 ~40s
+python3 tests/test_start_gate.py     # 在 WSL 构建环境内运行，全程 ~40s
 ```
 
 验证：无 START 不推理 → START 打开 → 停 START 关断（sticky 保留）→ DEBUG 强制 → DEBUG 关闭回门控。用 `/api/status` 的 `recognition` 字段作瞬时信号（fps 是 5s 速率窗口，不适合做门控断言）。
