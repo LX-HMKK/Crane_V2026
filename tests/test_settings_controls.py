@@ -1,3 +1,4 @@
+import threading
 from types import SimpleNamespace
 
 import cv2
@@ -59,6 +60,7 @@ def _settings_ui():
 
 def test_camera_runtime_setters_use_v4l2_values():
     camera = object.__new__(Camera)
+    camera._io_lock = threading.RLock()  # normally set in Camera.__init__
     camera.cap = FakeCapture()
     camera.device_index = "fake"
     camera.auto_exposure = None
