@@ -41,15 +41,15 @@ cameras:
       interval_sec: 1.0
 models:
   bean:
-    bin: assets/beans_v6.bin
+    bin: assets/beans_v7.bin
     cfg: assets/beans.yaml
-    pt: assets/beans_v6.pt
+    pt: assets/beans_v7.pt
     conf_thres: 0.7
     iou_thres: 0.45
   digit:
-    bin: assets/num_v6.bin
+    bin: assets/num_v7.bin
     cfg: assets/num.yaml
-    pt: assets/num_v6.pt
+    pt: assets/num_v7.pt
     conf_thres: 0.7
     iou_thres: 0.45
 inference:
