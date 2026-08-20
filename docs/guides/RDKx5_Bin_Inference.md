@@ -28,8 +28,8 @@
 | 文件 | 来源 | 作用 |
 |------|------|------|
 | `tools/99-crane-cameras.rules` | 本项目 | USB 摄像头 udev 绑定规则（复制到 `/etc/udev/rules.d/`） |
-| `assets/beans_v6.bin` | 本项目 | 豆子成熟度 BPU 模型 |
-| `assets/num_v6.bin` | 本项目 | 数字检测 BPU 模型 |
+| `assets/beans_v7.bin` | 本项目 | 豆子成熟度 BPU 模型 |
+| `assets/num_v7.bin` | 本项目 | 数字检测 BPU 模型 |
 | `assets/beans.yaml` | 本项目 | 豆子模型配置（nc、names、imgsz、reg_max、strides） |
 | `assets/num.yaml` | 本项目 | 数字模型配置 |
 | `models/` | 本项目 | 视觉运行时源码包 |
@@ -40,7 +40,7 @@
 从开发机拷到板端示例：
 ```bash
 scp -r models/ scripts/ configs/ tools/99-crane-cameras.rules \
-    assets/beans_v6.bin assets/num_v6.bin \
+    assets/beans_v7.bin assets/num_v7.bin \
     assets/beans.yaml assets/num.yaml \
     rdkx5:/home/root/crane/
 ```
@@ -73,10 +73,10 @@ task: detect
 python3 scripts/main_arm64.py
 ```
 
-也可显式使用向后兼容的 `--ui` 别名：
+也可显式指定配置文件：
 
 ```bash
-python3 scripts/main_arm64.py --ui
+python3 scripts/main_arm64.py --config /path/to/vision.yaml
 ```
 
 在 UI 中按 `1` / `2` 切换豆子/数字相机，按 ESC 退出。辅助线位置会自动保存到 `configs/vision.yaml`。
@@ -135,7 +135,7 @@ PY
 ssh root@192.168.128.10
 cd /home/sunrise/Crane_WS
 sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
-python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
+python3 scripts/main_arm64.py --headless --config /tmp/crane_vision.yaml
 ```
 
 > 测试结束后杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
@@ -186,7 +186,7 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 2. **NV12 输入的坑**：模型 `input_type_rt = nv12`，但当前脚本走的是 **RGB NCHW uint8** 路径（直接 `m.forward`），并未显式构造 NV12。脚本注释提示"真 NV12 模型应使用 hobot_dnn 的 helper"。若板端 `m.forward` 不接受 RGB uint8、或精度异常，需改用 `hobot_dnn` 的 NV12 / YUV420SP 输入接口（参考 RDK Model Zoo 的 yolov11 示例）。**上板后先单图验证精度再批量跑。**
 3. **pad 值 = 127**：letterbox 空白填 127（灰），与导出时校准数据预处理保持一致；改预处理要同步改校准数据。
 4. **`--config` 命名**：默认使用 `configs/vision.yaml`；若自定义路径请显式传 `--config <path>`。
-5. **类别数 `nc`**：脚本读取 `_rdkx5_config.yaml` 中的 `nc`；豆子模型 `nc=3`、数字模型 `nc=10`，必须靠 config yaml 覆盖，否则 cls 解码维度错。
+5. **类别数 `nc`**：脚本读取 `beans.yaml` / `num.yaml` 中的 `nc`；豆子模型 `nc=3`、数字模型 `nc=10`，必须靠 config yaml 覆盖，否则 cls 解码维度错。
 6. **不输出可视化**：当前脚本只 print 检测结果，不画框、不保存。需要可视化可自行加 `cv2.rectangle` + `cv2.imwrite`。
 
 ## 8. 常见问题
@@ -194,7 +194,7 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 | 现象 | 排查 |
 |------|------|
 | `ModuleNotFoundError: hobot_dnn` | 不在 RDKx5 板端环境；该脚本不能在开发机跑 |
-| `FileNotFoundError: ..._config.yaml` | `--config` 默认读取 `configs/vision.yaml` 中指定的 `_rdkx5_config.yaml`；检查文件是否已拷到板端 |
+| `FileNotFoundError: ..._config.yaml` | `--config` 默认读取 `configs/vision.yaml` 中指定的 `beans.yaml` / `num.yaml`；检查文件是否已拷到板端 |
 | 检测全无 / 置信度极低 | 检查 `nc` 是否匹配；检查 NV12 输入路径（注意事项 2）；检查 letterbox pad 值 |
 | 坐标偏移 | 确认 `strides` / `reg_max` 与模型一致；确认坐标回映的 `scale` / `pad` 未被改动 |
 | 类别错乱 | `names` dict 的 key 必须是 int（yaml 里 `0:` 会被解析为 int）；手改 yaml 注意别写成字符串 key |

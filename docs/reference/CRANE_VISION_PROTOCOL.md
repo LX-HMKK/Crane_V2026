@@ -36,7 +36,7 @@ RDK X5 通过 40PIN 物理引脚 8/10 与下位机通信：
 A5 5A 01
 ```
 
-其中 `A5 5A` 是帧头，`01` 是开始标志。退出自动模式后停止发送。视觉端在收到该命令前不要发送识别结果；收到后开始识别，并持续回传下面的 12 字节结果帧。如果连续 300 ms 没再收到开始命令，视觉端停止回传。
+其中 `A5 5A` 是帧头，`01` 是开始标志。退出自动模式后停止发送。视觉端在收到该命令前不要发送识别结果；收到后开始识别，并持续回传下面的 12 字节结果帧。如果连续一段时间没再收到开始命令，视觉端停止回传；该时间由 `configs/vision.yaml` 的 `protocol.start_timeout_sec` 控制，默认 **3.0 秒**（兼容下位机只发单帧 START 或心跳偶发丢失的场景，可按需调小）。
 
 > 视觉端在未收到开始命令期间（空闲）同样不运行模型推理，模型保持加载待命；收到开始命令后才开始识别。`CompetitionUI` 的 **DEBUG** 按钮可强制推理用于调试，但仅显示在界面，不改变串口回传门控（回传始终受开始命令约束），不改变本协议的任何字节行为。
 
@@ -111,10 +111,12 @@ while True:
         last_start_time = time.monotonic()
         receive_buffer.clear()
 
-    if time.monotonic() - last_start_time < 0.3:
+    if time.monotonic() - last_start_time < 3.0:
         port.write(frame)
         time.sleep(0.1)
 ```
+
+> 示例中使用 3.0 秒与 `configs/vision.yaml` 的默认 `protocol.start_timeout_sec` 一致；如需严格短超时，可同步改回 0.3 秒。
 
 ## STM32 联调
 

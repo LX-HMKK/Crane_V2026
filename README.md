@@ -4,9 +4,9 @@
 >
 > 双 USB 相机 + 两路 YOLO11 BPU 模型 + 串口通信，向下位机发送 12 字节结果帧。
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
-[![OpenCV](https://img.shields.io/badge/OpenCV-4.x-5C3EE8?style=flat-square&logo=opencv&logoColor=white)](https://opencv.org/)
-[![PySerial](https://img.shields.io/badge/PySerial-3.x-007396?style=flat-square)](https://pypi.org/project/pyserial/)
+[![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white)](https://opencv.org/)
+[![PySerial](https://img.shields.io/badge/PySerial-007396?style=flat-square)](https://pypi.org/project/pyserial/)
 [![YOLO11](https://img.shields.io/badge/YOLO11-BPU-00A0C4?style=flat-square)](https://docs.ultralytics.com/)
 [![目标板](https://img.shields.io/badge/目标板-RDK%20X5-0aa0c4?style=flat-square)](https://developer.horizon.ai/)
 [![串口](https://img.shields.io/badge/串口-921600%208N1-ff8c00?style=flat-square)](docs/reference/CRANE_VISION_PROTOCOL.md)
@@ -25,7 +25,7 @@
 - **豆子检测**：识别取货区 ①–③ 的豆子种类（白芸豆 / 黄豆 / 绿豆），映射为协议颜色编码（黄豆→1、绿豆→2、白芸豆→3）。
 - **数字检测**：识别放置区 ④–⑧ 货箱侧面的数字 1–5。
 - **逻辑补全**：缺区/重复时通过全局排列评分推断最可能的值，推断区以橙色框显示；超过上限（豆子 ≤1、数字 ≤2）时拒绝发送。
-- **串口输出**：收到下位机 START 帧（`A5 5A 01`）后，发送 12 字节结果帧（`A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`）。
+- **串口输出**：收到下位机 START 帧（`A5 5A 01`）后，发送 12 字节结果帧（`A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`）。START 心跳默认保持 **3.0 秒**有效，兼容单帧触发或偶发丢包。
 - **掉线重连**：相机/串口连接中断后自动重连；UI 状态栏显示 BEAN/DIGIT/SERIAL 连接状态，离线相机以占位画面提示。
 
 ## 🖼️ 界面预览
@@ -158,9 +158,13 @@ CHANGELOG.md       # 变更日志
 
 ### 安装依赖
 
+运行时与测试依赖：
+
 ```bash
 pip install -r requirements.txt
 ```
+
+开发机建议使用独立 conda 环境（如 `D:\conda_envs\crane-clean`，Python 3.11），避免 `opencv-python` 与系统包冲突。若进行 YOLOv5 训练/导出，额外安装 `tools/yolov5/requirements.txt`。 
 
 ### 运行测试
 
@@ -190,15 +194,17 @@ python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digi
 
 ### 校准辅助线
 
+x86 无相机时使用合成帧预览校准 UI：
+
 ```bash
 python tests/calibrate.py --mock-cameras
 ```
 
-在实时预览上通过滑块调整辅助线，点击 **SAVE** 手动写回 `configs/vision.yaml`。
+RDK X5 或开发机接真实相机时去掉 `--mock-cameras`，在实时预览上通过滑块调整辅助线，点击 **SAVE** 手动写回 `configs/vision.yaml`。
 
 ### 板端部署
 
-1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置）拷贝到 RDK X5。
+1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置，当前权重版本为 `*_v7.*`，`v7` 是训练权重迭代号，模型仍为 YOLO11）拷贝到 RDK X5。
 2. 校准辅助线：
    ```bash
    python3 tests/calibrate.py
@@ -239,7 +245,9 @@ crane-vision.service` 释放相机和串口。
 | ------ | ------ |
 | [docs/guides/vision_runtime.md](docs/guides/vision_runtime.md) | 运行时入口、状态机与分区映射规则 |
 | [docs/guides/RDKx5_Bin_Inference.md](docs/guides/RDKx5_Bin_Inference.md) | YOLO11 BPU 板端推理工作流 |
+| [docs/reference/vision_config.md](docs/reference/vision_config.md) | `configs/vision.yaml` 字段与映射规则参考 |
 | [docs/reference/CRANE_VISION_PROTOCOL.md](docs/reference/CRANE_VISION_PROTOCOL.md) | 串口硬件接线与 12 字节协议细节 |
+| [docs/reference/directory_structure.md](docs/reference/directory_structure.md) | 仓库目录结构与各模块职责 |
 | [docs/reference/conventions.md](docs/reference/conventions.md) | 数据集与资产命名规范 |
 | [docs/runbooks/commands.md](docs/runbooks/commands.md) | 完整命令清单（conda 环境、训练/导出、部署） |
 | [docs/runbooks/rdk_service.md](docs/runbooks/rdk_service.md) | `crane-vision.service` systemd 服务安装与运维 |

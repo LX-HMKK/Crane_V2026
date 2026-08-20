@@ -157,6 +157,7 @@ class SerialThread:
         self._thread = None
         self._reported_missing_frame = False
         self._reported_transmission = False
+        self._start_was_active = False
 
     # ── thread-safe properties (main thread ↔ serial thread) ──────────
 
@@ -211,7 +212,15 @@ class SerialThread:
                     time.sleep(0.1)
                     continue
                 self._port.poll_start()
-                if self._port.is_start_active(self._start_timeout):
+                start_active = self._port.is_start_active(self._start_timeout)
+                if start_active and not self._start_was_active:
+                    logging.info("Serial START heartbeat active")
+                    self._start_was_active = True
+                elif not start_active and self._start_was_active:
+                    logging.info("Serial START heartbeat timed out")
+                    self._start_was_active = False
+
+                if start_active:
                     frame = self.current_frame
                     if frame is not None:
                         self._reported_missing_frame = False

@@ -38,4 +38,5 @@
   - `inference_overlay`：`true` 时在校准画面上叠加推理框与分区编号，方便观察模型输出。
 
 - `inference.start_gated`：`true`（默认）时仅在下位机发送 START 时运行推理（空闲模型保持加载待命）；`false` 关闭门控（无串口的 x86 开发路径视为恒开启）。
+- `protocol.start_timeout_sec`：收到一帧 `A5 5A 01` 后保持 active 的时间。默认 `3.0` 秒，可兼容下位机只发单帧 START 或心跳偶发丢失；若需严格短超时，可改回 `0.3`。
 - `debug.force_inference`：headless 无 UI 时强制推理的现场调试开关（等价于 UI 的 DEBUG 按钮）。

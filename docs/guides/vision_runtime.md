@@ -9,7 +9,7 @@
 python3 scripts/main_arm64.py
 
 # RDK X5 竞赛模式（看门狗会自动调用）
-python3 scripts/main_arm64.py --no-ui
+python3 scripts/main_arm64.py --headless
 
 # 查看可用相机
 python3 scripts/main_arm64.py --list-cameras
@@ -21,16 +21,16 @@ python3 scripts/main_arm64.py --config /path/to/vision.yaml
 python3 scripts/main_arm64.py --mock-cameras
 ```
 
-> `--ui` 仍是默认校准模式的向后兼容别名，与不带参数效果相同。`--mock-cameras` 使用合成帧替代真实相机；在 RDK X5 上仍会加载 BPU 模型并执行真实推理，仅相机帧为合成，常用于无真实相机时的算法验证。
+> `--mock-cameras` 使用合成帧替代真实相机；在 RDK X5 上仍会加载 BPU 模型并执行真实推理，仅相机帧为合成，常用于无真实相机时的算法验证。
 
 ## 配置字段
 
 见 `configs/vision.yaml`，主要包含（完整字段与映射规则参考见 [docs/reference/vision_config.md](../reference/vision_config.md)）：
 
 - `serial`：串口设备、波特率、读超时、掉线重连（`serial.reconnect`）。
-- `protocol`：START 命令超时（默认 300 ms）、结果帧发送间隔（默认 0.1 s，对应 10 Hz）、轮询间隔、扫描重试间隔。
+- `protocol`：START 命令超时（默认 **3.0 s**，兼容下位机只发单帧 START 或心跳偶发丢失；可按需调小）、结果帧发送间隔（默认 0.05 s，对应 20 Hz）、两路结果最大时间差。
 - `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小、掉线重连（`cameras.<name>.reconnect`）。
-- `models.bean` / `models.digit`：`.bin` 模型路径与对应 `_rdkx5_config.yaml`。
+- `models.bean` / `models.digit`：`.bin` 模型路径与对应部署配置 YAML（`beans.yaml` / `num.yaml`）。
 - `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`、`start_gated`（默认 true，仅在下位机发送 START 时运行推理）。
 - `debug`：`force_inference`（headless 无 UI 时强制推理的现场调试开关）。
 - `scan`：连续扫描帧数、最大重试次数、总超时。
@@ -39,15 +39,15 @@ python3 scripts/main_arm64.py --mock-cameras
 
 ## 状态机
 
-```text
-INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
-```
+竞赛运行时（`scripts/main_arm64.py`）在 **headless** 与 **UI** 两种模式下共用同一套结果逻辑：
 
 1. **INIT**：加载配置，初始化串口、两个 Camera、两个 BPU 模型，预热推理。
-2. **WAIT_START**：循环读取串口，检测下位机发送的 `A5 5A 01` START 命令。未收到前视觉端保持静默，不发送任何数据，也不运行模型推理；两路相机持续采集保持画面新鲜，模型保持加载待命（预热）。
-3. **SCANNING**：收到 START 后进入识别状态，连续采集 `scan.frames` 帧，分别对豆子/数字相机做 BPU 推理，通过 `TaskGenerator.generate_frame()` 生成 8 字节结果。
-4. **SENDING**：获得完整合法结果后，以 `protocol.send_interval_sec` 间隔（默认 0.1 s，即 10 Hz）重复发送 12 字节结果帧 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`。
-5. **SILENT**：若连续 300 ms 未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
+2. **WAIT_START**：循环读取串口，检测下位机发送的 `A5 5A 01` START 命令。未收到前视觉端保持静默，不发送任何数据，也不运行模型推理；相机持续采集保持画面新鲜，模型保持加载待命（预热）。
+3. **RUNNING**：收到 START 后进入识别状态。
+   - **headless 模式**：按 `scan.frames`（默认 2）连续采集并对两路相机做 BPU 推理，通过 `TaskGenerator.generate_frame_with_completion()` 生成 8 字节结果，写入 `serial.current_frame`。
+   - **CompetitionUI 模式**：两路独立采集线程持续覆盖各自模型的最新帧槽，两路独立推理线程并行执行 `model.predict()`；`CompetitionResultController` 按 `protocol.send_interval_sec` 周期组合最新两路检测结果并更新 `serial.current_frame`。
+4. **SENDING**：`SerialThread` 以 `protocol.send_interval_sec` 间隔（默认 0.05 s，即 20 Hz）读取 `current_frame`，在 START 有效期间重复发送 12 字节结果帧 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`。
+5. **SILENT**：若连续 `protocol.start_timeout_sec`（默认 **3.0 s**）未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
 
 > **赛前准备阶段视觉保持静默**，只有收到 START 命令后才开始识别并回传结果帧。空闲期间模型不推理但保持加载；`CompetitionUI` 右侧的 **DEBUG** 按钮可无视 START 强制推理并显示到界面（仅调试显示，不改变串口回传门控），`configs/vision.yaml` 的 `inference.start_gated: false` 可整体关闭门控。
 
@@ -113,7 +113,7 @@ INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
 
 ### 缺失与重试策略
 
-1. 连续采集 `scan.frames` 帧（默认 5）。
+1. 连续采集 `scan.frames` 帧（默认 2）。
 2. 每帧分别对豆子相机和数字相机做推理。
 3. 按辅助线把每个检测框归入对应区域。
 4. 每个区域保留**置信度最高**的检测结果。
@@ -127,7 +127,7 @@ INIT → WAIT_START → SCANNING → SENDING → SILENT → (resume) SENDING
 ./scripts/watchdog.sh
 ```
 
-`main_arm64.py --no-ui` 退出后会自动在 2 秒后重启。
+`main_arm64.py --headless` 退出后会自动在 2 秒后重启。
 
 ## x86 开发与完整流程测试
 
@@ -135,9 +135,9 @@ x86 主机没有 `hobot_dnn`，但 `main_amd64.py` 可以通过 `ultralytics` �
 
 ```bash
 # 全量单元测试（无需 hobot_dnn / ultralytics）
-conda run --prefix /d/conda_envs/crane-clean python -m pytest tests/ -v
+conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/ -v
 
-# 交互式预览：按 SPACE / s 扫描，ESC 退出（需要 ultralytics）
+# 交互式预览：按 1/2 切换视图，按 ESC 退出（需要 ultralytics）
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
 
 # 单次扫描并退出
@@ -148,7 +148,7 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 
 ## 部署清单
 
-1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*_rdkx5_config.yaml` 一起拷贝到 RDKx5。
+1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*.yaml` 一起拷贝到 RDKx5。
 2. 上电后先运行 `python3 scripts/main_arm64.py` 校准辅助线。
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。
@@ -158,4 +158,4 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 
 - 实现日期：2026-07-07
 - 协议更新日期：2026-07-11
-- 测试环境：Windows 11 x86（pytest）+ RDKx5（待实测）
+- 状态机/模块分层更新日期：2026-08-20

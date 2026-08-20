@@ -8,7 +8,9 @@ serial:
     after_failures: 5
     interval_sec: 1.0
 protocol:
-  start_timeout_sec: 0.3
+  # START 心跳超时：收到一帧 START 后在该时间内保持 active；
+  # 调大后可兼容下位机只发单帧 START 的场景，超时后再退化为 OFF。
+  start_timeout_sec: 3.0
   send_interval_sec: 0.05
   # 两路相机推理结果的最大采集时间差，超过时不组合下发
   pair_max_skew_sec: 0.15

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 
 ## 项目概述
 
-2026 物流技术创意赛视觉目标检测工作空间：RDK X5 视觉运行时（`models/`、`scripts/`、`configs/`）。双 USB 相机 + 两路 YOLO11 BPU `.bin` 模型 + 串口，向下位机发送 12 字节结果帧。
+2026 物流技术创意赛视觉目标检测工作空间：RDK X5 视觉运行时（`models/`、`scripts/`、`configs/`）。双 USB 相机 + 两路 YOLO11 BPU `.bin` 模型 + 串口，向下位机发送 12 字节结果帧。运行时模块已分层：`models/application/`（入口与结果协调）、`models/ui/`（viewer / 校准 / 竞赛 UI）、`models/devices/`（相机与串口）、`models/inference/`（BPU/PyTorch 模型）。
 
 > 板端推理以 `docs/guides/RDKx5_Bin_Inference.md` 为准。目录结构、配置字段、提交规范等低频参考见[文档索引](#文档索引)。
 
@@ -16,13 +16,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working in this
 | --- | --- | --- |
 | 主线程 (Tkinter) | `CompetitionUI` | 仅显示当前选中的相机预览、辅助线和检测框，不阻塞采集或推理 |
 | 相机 worker (daemon, 每路一个) | `CompetitionUI._capture_worker` | 持续采集，覆盖各自模型的最新帧槽，不建立帧队列 |
-| 推理 worker (daemon, 每模型一个) | `CalibrationUI._inference_worker` | 各自执行 `model.predict()` 并发布最新检测结果 |
-| 结果组合 (受 `_task_lock` 保护) | `CompetitionUI._on_inference_done()` | 按串口发送周期组合两路最新检测，更新 `serial.current_frame` |
+| 推理 worker (daemon, 每模型一个) | `CalibrationUI._inference_worker`（位于 `models/ui/calibration.py`） | 各自执行 `model.predict()` 并发布最新检测结果 |
+| 结果组合 | `CompetitionResultController`（`models/application/competition_controller.py`） | 按串口发送周期组合两路最新检测，更新 `serial.current_frame` |
 | 串口线程 (daemon) | `SerialThread` | `poll_start()` @200Hz → `send_result()` @20Hz |
 
 **逻辑补全**：`generate_frame_with_completion()` 在检测缺区/重复时，通过全局排列评分推断最可能的值。推断区在 UI 上以橙色框显示。推断超过上限（bean≤1, digit≤2）时拒绝发送。
 
-**START 门控推理**：模型推理仅在收到下位机 START 时运行（空闲模型保持加载待命，由 `inference.start_gated` 控制）；START 停止后清空串口缓存，恢复后以新推理结果续发。`CompetitionUI` 右侧 **DEBUG** 按钮可强制推理并显示（仅调试显示，不改变串口门控）；`debug.force_inference` 供 headless 现场调试。
+**START 门控推理**：模型推理仅在收到下位机 START 时运行（空闲模型保持加载待命，由 `inference.start_gated` 控制）；START 停止后清空串口缓存，恢复后以新推理结果续发。`configs/vision.yaml` 的 `protocol.start_timeout_sec` 默认 3.0 秒，收到单帧 START 后也会保持 active 一段时间。`CompetitionUI` 右侧 **DEBUG** 按钮可强制推理并显示（仅调试显示，不改变串口门控）；`debug.force_inference` 供 headless 现场调试。
 
 ## 常用命令
 

@@ -2,6 +2,27 @@
 
 本文件记录项目的所有重要变更，格式基于 [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)。
 
+## [Unreleased] - 2026-08-20
+
+### 新增
+
+- START 门控推理：仅在下位机发送 START 心跳时运行推理，空闲模型保持加载待命；UI 增加 DEBUG 按钮用于显示-only 调试，headless 增加等价的 `debug.force_inference` 开关。
+- 共享 START 门控辅助函数 `inference_gate_open()` / `serial_start_active()`，统一 UI 与 headless 的门控判断。
+- 竞赛结果控制器 `CompetitionResultController`，将协议发布状态从 Tkinter UI 层独立出来，便于 headless 与 UI 共用同一套逻辑补全和发送限速策略。
+- 串口 START 心跳状态切换日志：收到 START 和超时时各打印一次，便于现场确认下位机是否真正发送命令。
+- 运行时模块分层重构：`models/runtime.py` 拆分为 `models/application/runtime.py` 与 `models/application/competition_controller.py`；`models/ui.py` 拆分为 `models/ui/viewer.py`、`models/ui/calibration.py`、`models/ui/competition.py`；`models/serial_port.py` 迁移至 `models/devices/serial_port.py`。
+- 豆子/数字检测权重更新至 v7（beans_v7 / num_v7）。
+
+### 变更
+
+- `protocol.start_timeout_sec` 默认值由 `0.3` 秒调整为 `3.0` 秒，收到单帧 START 后保持 active 更久，兼容下位机只发单帧或心跳偶发丢失的场景；仍可按需调小以恢复严格短超时。
+- README 美化，新增界面预览与运行流程图；CLAUDE.md 低频参考内容下沉到 `docs/runbooks/` 与 `docs/reference/`。
+
+### 修复
+
+- START 门控陈旧帧发送风险：START 停止后清空串口缓存，恢复后以新推理结果续发；DEBUG 强制推理结果不再写入串口缓存和失败计数器。
+- 相机 V4L2 setter 测试缺少 `_io_lock` 的问题。
+
 ## [Unreleased] - 2026-08-03
 
 ### 新增
