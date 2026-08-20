@@ -115,18 +115,20 @@ docs/              # 部署与运行时文档
   runbooks/        #   commands.md            — 完整命令清单
                    #   rdk_service.md         — crane-vision.service 系统服务运维
   images/          #   UI 界面预览截图
-models/            # 视觉运行时源码（16 个 .py）
-  camera_viewer.py              # CameraViewer 基类
-  ui.py                         # CalibrationUI(CameraViewer) + CompetitionUI(CalibrationUI)
-  config_binding.py             # ConfigBinding：类型化配置绑定
-  yolo11_postprocess.py         # letterbox / DFL 解码 / NMS / 坐标回映
-  yolo11_model.py / bpu_loader.py  # BPU 推理封装（x86 上回退）
-  bean_model.py / digit_model.py   # 豆子/数字模型薄封装
-  camera.py / pt_model.py          # 相机封装 / x86 PyTorch 推理
-  serial_port.py                # SerialPort + SerialThread（后台串口）
-  task_generator.py             # 分区聚合 + 逻辑补全
-  logic_completion.py           # 置信度排列评分 + 缺区推断
-  mapping.py / runtime.py       # 豆子→颜色映射 / 入口共享助手
+models/            # 视觉运行时源码
+  application/                  # 运行时装配与入口共享助手
+    runtime.py
+  config/                        # 配置绑定
+    config_binding.py
+  devices/                       # 相机和串口设备访问
+    camera.py / serial_port.py
+  domain/                        # 分区聚合、映射与逻辑补全
+    mapping.py / task_generator.py / logic_completion.py
+  inference/                     # BPU / PyTorch 推理与 YOLO11 后处理
+    bpu_loader.py / yolo11_model.py / yolo11_postprocess.py
+    bean_model.py / digit_model.py / pt_model.py
+  ui/                            # Tkinter 界面，按职责拆分
+    viewer.py / calibration.py / competition.py
 scripts/           # 视觉运行时入口
   main_arm64.py                 # RDK X5 竞赛模式入口（CompetitionUI）
   main_amd64.py                 # x86 双相机 PyTorch 推理 + 逻辑补全（CompetitionUI，无串口）

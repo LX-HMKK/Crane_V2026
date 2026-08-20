@@ -17,8 +17,8 @@ sys.path.insert(0, str(ROOT))
 
 import serial
 
-from models.runtime import ROOT as RUNTIME_ROOT, init_logging, load_vision_cfg
-from models.serial_port import START_COMMAND, SerialPort, open_serial_port
+from models.application.runtime import ROOT as RUNTIME_ROOT, init_logging, load_vision_cfg
+from models.devices.serial_port import START_COMMAND, SerialPort, open_serial_port
 
 
 def _load_serial_cfg(config_path):

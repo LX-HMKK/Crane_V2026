@@ -12,7 +12,7 @@ import pytest
 import serial
 import time
 import threading
-from models.serial_port import SerialPort, SerialThread, START_COMMAND, open_serial_port
+from models.devices.serial_port import SerialPort, SerialThread, START_COMMAND, open_serial_port
 
 
 def test_wait_start_detects_start_command():
@@ -163,7 +163,7 @@ def test_send_result_raises_on_partial_write():
 
 def test_serial_thread_does_not_log_each_start_heartbeat(monkeypatch, caplog):
     import logging
-    import models.serial_port as serial_port
+    import models.devices.serial_port as serial_port
 
     class HeartbeatPort:
         def poll_start(self):
@@ -266,7 +266,7 @@ class _FailingSerialPort:
 
 def _make_failing_thread(monkeypatch, **thread_kwargs):
     """Build a SerialThread backed by an always-failing fake port factory."""
-    import models.serial_port as serial_port
+    import models.devices.serial_port as serial_port
 
     created = []
 
@@ -341,7 +341,7 @@ def test_serial_thread_connected_property():
 
 def test_serial_thread_survives_failed_reopen(monkeypatch):
     """A failed reopen leaves _port None; _run must not crash and keeps retrying."""
-    import models.serial_port as serial_port
+    import models.devices.serial_port as serial_port
 
     calls = {"n": 0}
 

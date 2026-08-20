@@ -173,7 +173,7 @@ python3 scripts/main_arm64.py --no-ui --config /tmp/crane_vision.yaml
 ### 6.2 后处理步骤
 
 1. **DFL 解码**：`bbox (...,64)` → reshape `(...,4,16)` → softmax → 与 `[0..15]` 加权求和 → `(...,4)` 回归值
-2. **还原 xyxy**：YOLO11 回归输出到网格中心的 `l,t,r,b` 距离，结合网格中心 `(x+0.5, y+0.5)` × stride 还原到输入尺度 xyxy
+2. **还原 xyxy**：DFL 解码后的 `l,t,r,b` 是特征图距离，先乘对应 P3/P4/P5 stride，再与网格中心 `(x+0.5, y+0.5)` × stride 组合，得到输入尺度 xyxy
 3. **类别分数**：cls 做 sigmoid，最大值为 `conf`、argmax 为 `cls_id`，按 `conf_thres` 过滤
 4. **NMS**：按类别分组执行 `cv2.dnn.NMSBoxes`，仅抑制同一类内的重叠框
 5. **回映原图**：`(coord - pad) / scale`

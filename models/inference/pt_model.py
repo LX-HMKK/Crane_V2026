@@ -2,7 +2,7 @@
 
 Loads `.pt` models via the Ultralytics YOLO API. On environments without
 `ultralytics` installed, importing this module succeeds but instantiation
-raises `EnvironmentError`, mirroring the behaviour of `models.bpu_loader`.
+raises `EnvironmentError`, mirroring the behaviour of `models.inference.bpu_loader`.
 """
 
 import logging

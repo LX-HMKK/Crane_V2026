@@ -4,8 +4,8 @@
 
 ```text
 assets/            # 训练好的模型产物（.pt、.onnx、.bin）
-                   #   num.* / num_v6.* – 数字检测器
-                   #   beans_v6.* – 豆子成熟度检测器
+                   #   num.* / num_v7.* – 数字检测器
+                   #   beans_v7.* – 豆子成熟度检测器
                    #   *.yaml（beans.yaml / num.yaml）– BPU 部署配置
 configs/           # 运行时配置
                    #   vision.yaml – 串口、相机、模型、辅助线、映射
@@ -28,14 +28,18 @@ docs/              # 部署与运行时文档
                    #     RDKx5_Bin_Inference.md   – YOLO11 BPU 板端工作流
                    #     vision_runtime.md        – 运行时入口、状态机与分区映射规则
 models/            # 视觉运行时源码
-                   #   camera_viewer.py – CameraViewer 基类
-                   #   ui.py – CalibrationUI(CameraViewer) + CompetitionUI(CalibrationUI)
-                   #   yolo11_postprocess.py, yolo11_model.py, bpu_loader.py
-                   #   bean_model.py, digit_model.py, camera.py, pt_model.py
-                   #   serial_port.py  – SerialPort + SerialThread（后台串口）
-                   #   task_generator.py – 分区聚合 + 逻辑补全
-                   #   logic_completion.py – 置信度排列评分 + 缺区推断
-                   #   mapping.py, runtime.py – 入口共享助手
+                   #   application/runtime.py, competition_controller.py
+                   #     – 入口共享助手、双相机结果配对与发送调度
+                   #   config/config_binding.py – 类型化配置绑定
+                   #   devices/camera.py, serial_port.py – 相机与串口访问
+                   #   domain/mapping.py, zones.py, task_generator.py, logic_completion.py
+                   #     – 业务映射、分区聚合、区域布局、逻辑补全
+                   #   inference/bpu_loader.py, yolo11_model.py,
+                   #     yolo11_postprocess.py, bean_model.py, digit_model.py,
+                   #     pt_model.py – BPU / PyTorch 推理
+                   #   ui/viewer.py – CameraViewer 基类
+                   #   ui/calibration.py – CalibrationUI：校准、设置、推理叠加
+                   #   ui/competition.py – CompetitionUI：采集、状态机、串口结果
 scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 竞赛模式入口
                    #   main_amd64.py – x86 双相机 PyTorch 推理 + 逻辑补全（CompetitionUI）

@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.runtime import (
+from models.application.runtime import (
     ROOT as RUNTIME_ROOT,
     create_task_generator,
     inference_gate_open,
@@ -35,7 +35,7 @@ from models.runtime import (
     serial_start_active,
     warmup_models,
 )
-from models.serial_port import SerialThread
+from models.devices.serial_port import SerialThread
 
 _RUNTIME_IMPORT_DURATION_SEC = time.monotonic() - _BOOTSTRAP_STARTED_AT
 

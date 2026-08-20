@@ -6,9 +6,9 @@ import numpy as np
 import pytest
 import yaml
 
-from models.bean_model import BeanModel
-from models.bpu_loader import BpuModel, _nv12_from_bgr, _nv12_from_rgb_nchw
-from models.digit_model import DigitModel
+from models.inference.bean_model import BeanModel
+from models.inference.bpu_loader import BpuModel, _nv12_from_bgr, _nv12_from_rgb_nchw
+from models.inference.digit_model import DigitModel
 
 
 def test_bpu_model_raises_on_x86():
@@ -42,7 +42,7 @@ def _write_cfg(tmp_path, **kwargs):
 
 
 def test_bpu_model_happy_path_with_mock(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg, cfg_file = _write_cfg(tmp_path)
     bin_file = tmp_path / "num.bin"
@@ -51,7 +51,7 @@ def test_bpu_model_happy_path_with_mock(tmp_path, monkeypatch):
     mock_model = mock.Mock()
     mock_model.forward.return_value = ["output"]
     mock_load = mock.Mock(return_value=[mock_model])
-    monkeypatch.setattr("models.bpu_loader.dnn", mock.Mock(load=mock_load))
+    monkeypatch.setattr("models.inference.bpu_loader.dnn", mock.Mock(load=mock_load))
 
     model = BpuModel(str(bin_file), str(cfg_file))
     assert model.cfg == cfg
@@ -64,14 +64,14 @@ def test_bpu_model_happy_path_with_mock(tmp_path, monkeypatch):
 
 
 def test_bpu_model_load_returns_non_sequence(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     _, cfg_file = _write_cfg(tmp_path)
     bin_file = tmp_path / "num.bin"
     bin_file.write_text("fake bin")
 
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=object()))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=object()))
     )
 
     with pytest.raises(TypeError, match="sequence"):
@@ -79,7 +79,7 @@ def test_bpu_model_load_returns_non_sequence(tmp_path, monkeypatch):
 
 
 def test_bpu_model_missing_bin(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     _, cfg_file = _write_cfg(tmp_path)
 
@@ -88,7 +88,7 @@ def test_bpu_model_missing_bin(tmp_path, monkeypatch):
 
 
 def test_bpu_model_missing_config_key(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg_file = tmp_path / "num_rdkx5_config.yaml"
     with open(cfg_file, "w", encoding="utf-8") as f:
@@ -97,7 +97,7 @@ def test_bpu_model_missing_config_key(tmp_path, monkeypatch):
     bin_file.write_text("fake bin")
 
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
     )
 
     with pytest.raises(ValueError, match="missing required key"):
@@ -105,7 +105,7 @@ def test_bpu_model_missing_config_key(tmp_path, monkeypatch):
 
 
 def test_bpu_model_infer_validation(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     _, cfg_file = _write_cfg(tmp_path)
     bin_file = tmp_path / "num.bin"
@@ -113,7 +113,7 @@ def test_bpu_model_infer_validation(tmp_path, monkeypatch):
 
     mock_model = mock.Mock()
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
     )
 
     model = BpuModel(str(bin_file), str(cfg_file))
@@ -138,7 +138,7 @@ def test_bpu_model_infer_validation(tmp_path, monkeypatch):
 
 
 def test_bpu_model_bin_is_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     _, cfg_file = _write_cfg(tmp_path)
     bin_dir = tmp_path / "num.bin"
@@ -149,7 +149,7 @@ def test_bpu_model_bin_is_directory(tmp_path, monkeypatch):
 
 
 def test_bpu_model_cfg_is_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg_dir = tmp_path / "num_rdkx5_config.yaml"
     cfg_dir.mkdir()
@@ -161,7 +161,7 @@ def test_bpu_model_cfg_is_directory(tmp_path, monkeypatch):
 
 
 def test_bpu_model_empty_config(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg_file = tmp_path / "num_rdkx5_config.yaml"
     cfg_file.write_text("\n\n", encoding="utf-8")
@@ -169,7 +169,7 @@ def test_bpu_model_empty_config(tmp_path, monkeypatch):
     bin_file.write_text("fake bin")
 
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
     )
 
     with pytest.raises(ValueError, match="config file is empty"):
@@ -177,14 +177,14 @@ def test_bpu_model_empty_config(tmp_path, monkeypatch):
 
 
 def test_bpu_model_load_returns_empty_sequence(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     _, cfg_file = _write_cfg(tmp_path)
     bin_file = tmp_path / "num.bin"
     bin_file.write_text("fake bin")
 
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[]))
     )
 
     with pytest.raises(TypeError, match="sequence"):
@@ -231,7 +231,7 @@ def test_model_predict_calls_bpu_and_postprocess(model_class, tmp_path):
     cfg_path = tmp_path / f"{model_class.__name__.lower()}.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
@@ -256,7 +256,7 @@ def test_model_predict_uses_direct_nv12_input_when_supported(tmp_path):
         0, 256, (640, 640, 3), dtype=np.uint8
     )
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.input_type = "NV12"
@@ -279,7 +279,7 @@ def test_model_predict_nv12_path_preserves_legacy_uint8_cast(tmp_path):
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
     image = np.full((640, 640, 3), 17.9, dtype=np.float32)
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.input_type = "NV12"
@@ -300,7 +300,7 @@ def test_model_predict_uses_per_model_thresholds(tmp_path):
     cfg_path = tmp_path / "override.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
@@ -317,7 +317,7 @@ def test_model_predict_uses_per_model_thresholds(tmp_path):
     cfg_path = tmp_path / "rgb.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
@@ -343,8 +343,8 @@ def test_model_predict_uses_runtime_threshold_updates(tmp_path):
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
     outputs = _fake_outputs_for_cfg(cfg)
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu, mock.patch(
-        "models.yolo11_model.postprocess",
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu, mock.patch(
+        "models.inference.yolo11_model.postprocess",
         return_value=np.zeros((0, 6), dtype=np.float32),
     ) as postprocess_mock:
         bpu = mock.MagicMock()
@@ -368,7 +368,7 @@ def test_model_predict_rejects_bad_input(model_class, tmp_path):
     cfg_path = tmp_path / f"{model_class.__name__.lower()}.yaml"
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         MockBpu.return_value = bpu
@@ -392,7 +392,7 @@ def test_model_normalize_names_int_keys(tmp_path):
     # YAML may load integer-like keys as strings; _normalize_names must coerce them.
     cfg["names"] = {"0": "white", "1": "green", "2": "yellow"}
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         MockBpu.return_value = bpu
@@ -407,7 +407,7 @@ def test_model_normalize_names_rejects_non_int_keys(tmp_path):
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
     cfg["names"] = {"a": "white", "1": "green", "2": "yellow"}
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         MockBpu.return_value = bpu
@@ -420,7 +420,7 @@ def test_model_predict_rectangular_imgsz(tmp_path):
     cfg = create_dummy_cfg(cfg_path, ["white", "green", "yellow"])
     cfg["imgsz"] = [384, 640]
 
-    with mock.patch("models.yolo11_model.BpuModel") as MockBpu:
+    with mock.patch("models.inference.yolo11_model.BpuModel") as MockBpu:
         bpu = mock.MagicMock()
         bpu.cfg = cfg
         bpu.infer.return_value = _fake_outputs_for_cfg(cfg)
@@ -451,7 +451,7 @@ def test_model_predict_rectangular_imgsz(tmp_path):
     ],
 )
 def test_bpu_model_config_validation(tmp_path, monkeypatch, bad_cfg, error_match):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     base = {"imgsz": 640, "nc": 3, "names": {0: "white", 1: "green", 2: "yellow"}, "reg_max": 16, "strides": [8, 16, 32]}
     base.update(bad_cfg)
@@ -462,7 +462,7 @@ def test_bpu_model_config_validation(tmp_path, monkeypatch, bad_cfg, error_match
     bin_file.write_text("fake bin")
 
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock.Mock()]))
     )
 
     with pytest.raises(ValueError, match=error_match):
@@ -470,7 +470,7 @@ def test_bpu_model_config_validation(tmp_path, monkeypatch, bad_cfg, error_match
 
 
 def test_bpu_model_infer_rejects_wrong_spatial_shape(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg, cfg_file = _write_cfg(tmp_path, imgsz=640)
     bin_file = tmp_path / "num.bin"
@@ -478,7 +478,7 @@ def test_bpu_model_infer_rejects_wrong_spatial_shape(tmp_path, monkeypatch):
 
     mock_model = mock.Mock()
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
     )
 
     model = BpuModel(str(bin_file), str(cfg_file))
@@ -487,7 +487,7 @@ def test_bpu_model_infer_rejects_wrong_spatial_shape(tmp_path, monkeypatch):
 
 
 def test_bpu_model_infer_accepts_list_imgsz(tmp_path, monkeypatch):
-    monkeypatch.setattr("models.bpu_loader.HAS_HOBOT", True)
+    monkeypatch.setattr("models.inference.bpu_loader.HAS_HOBOT", True)
 
     cfg, cfg_file = _write_cfg(tmp_path, imgsz=[384, 640])
     bin_file = tmp_path / "num.bin"
@@ -495,7 +495,7 @@ def test_bpu_model_infer_accepts_list_imgsz(tmp_path, monkeypatch):
 
     mock_model = mock.Mock()
     monkeypatch.setattr(
-        "models.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
+        "models.inference.bpu_loader.dnn", mock.Mock(load=mock.Mock(return_value=[mock_model]))
     )
 
     model = BpuModel(str(bin_file), str(cfg_file))

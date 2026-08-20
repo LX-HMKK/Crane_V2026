@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import cv2
 
-from models.camera import Camera
-from models.config_binding import ConfigBinding
+from models.devices.camera import Camera
+from models.config.config_binding import ConfigBinding
 from models.ui import CalibrationUI
 
 

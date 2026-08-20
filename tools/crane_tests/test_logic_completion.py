@@ -8,9 +8,9 @@ sys.modules["ultralytics"] = None
 sys.modules["torch"] = None
 
 import pytest
-from models.logic_completion import count_inferred, validate_and_complete
-from models.mapping import DEFAULT_BEAN_TO_DIGIT
-from models.task_generator import TaskGenerator
+from models.domain.logic_completion import count_inferred, validate_and_complete
+from models.domain.mapping import DEFAULT_BEAN_TO_DIGIT
+from models.domain.task_generator import TaskGenerator
 
 
 # ── shared fixtures ────────────────────────────────────────────────────────

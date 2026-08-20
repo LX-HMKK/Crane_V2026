@@ -1,8 +1,8 @@
 import cv2
 import numpy as np
 
-from models.bpu_loader import BpuModel, _nv12_from_bgr
-from models.yolo11_postprocess import (
+from models.inference.bpu_loader import BpuModel, _nv12_from_bgr
+from models.inference.yolo11_postprocess import (
     _make_anchors,
     letterbox,
     postprocess,

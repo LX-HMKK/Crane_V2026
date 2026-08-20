@@ -10,8 +10,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.camera import StaticImageCamera
-from models.runtime import (
+from models.devices.camera import StaticImageCamera
+from models.application.runtime import (
     ROOT as RUNTIME_ROOT,
     init_logging,
     list_cameras,
@@ -20,7 +20,7 @@ from models.runtime import (
     open_camera,
     release_cameras,
 )
-from models.serial_port import open_serial_port
+from models.devices.serial_port import open_serial_port
 from models.ui import CalibrationUI
 
 

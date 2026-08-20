@@ -8,14 +8,14 @@ from pathlib import Path
 import yaml
 
 # Add repo root to path so scripts/ can import models/
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parents[2]
 sys.path.insert(0, str(ROOT))
 
-from models.bean_model import BeanModel
-from models.camera import Camera, MockCamera
-from models.digit_model import DigitModel
-from models.mapping import DEFAULT_BEAN_TO_DIGIT
-from models.task_generator import TaskGenerator
+from models.inference.bean_model import BeanModel
+from models.devices.camera import Camera, MockCamera
+from models.inference.digit_model import DigitModel
+from models.domain.mapping import DEFAULT_BEAN_TO_DIGIT
+from models.domain.task_generator import TaskGenerator
 
 
 def load_vision_cfg(path):
@@ -107,7 +107,7 @@ def load_pt_models(cfg):
     """
     # Ultralytics/Torch is only needed for the x86 path. Deferring this import
     # keeps the RDK BPU boot path free of its expensive optional dependencies.
-    from models.pt_model import PtBeanModel, PtDigitModel
+    from models.inference.pt_model import PtBeanModel, PtDigitModel
 
     bean_model = PtBeanModel(
         cfg["models"]["bean"]["pt"],

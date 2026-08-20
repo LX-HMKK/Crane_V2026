@@ -106,6 +106,14 @@ def postprocess(outputs, cfg, anchors=None, dfl_proj=None):
     dfl_preds = np.concatenate(dfl_candidates, axis=0)
     bbox = _dfl_decode(dfl_preds, reg_max, proj=dfl_proj)
     anchors = anchors[mask]
+    # DFL distances are expressed in feature-map cells. Anchors above are
+    # already in input-image pixels, so scale each candidate's l/t/r/b
+    # distance by the stride of the head that produced it.
+    stride_per_anchor = np.concatenate([
+        np.full((imgsz_h // stride) * (imgsz_w // stride), stride)
+        for stride in strides
+    ])
+    bbox *= stride_per_anchor[mask, None]
 
     xyxy = np.empty_like(bbox)
     xyxy[:, 0] = anchors[:, 0] - bbox[:, 0]
@@ -120,7 +128,17 @@ def postprocess(outputs, cfg, anchors=None, dfl_proj=None):
     for cls in np.unique(cls_id):
         mask = cls_id == cls
         idxs = np.where(mask)[0]
-        boxes = [xyxy[i].tolist() for i in idxs]
+        # OpenCV expects [x, y, width, height], while the detector stores
+        # [x1, y1, x2, y2]. Passing xyxy here corrupts overlap suppression.
+        boxes = [
+            [
+                float(xyxy[i, 0]),
+                float(xyxy[i, 1]),
+                float(xyxy[i, 2] - xyxy[i, 0]),
+                float(xyxy[i, 3] - xyxy[i, 1]),
+            ]
+            for i in idxs
+        ]
         scores = conf[mask].tolist()
         selected = cv2.dnn.NMSBoxes(boxes, scores, conf_thres, iou_thres)
         if len(selected) == 0:

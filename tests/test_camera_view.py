@@ -12,9 +12,9 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from models.camera import StaticImageCamera
-from models.camera_viewer import CameraViewer
-from models.runtime import (
+from models.devices.camera import StaticImageCamera
+from models.ui.viewer import CameraViewer
+from models.application.runtime import (
     ROOT as RUNTIME_ROOT,
     init_logging,
     load_vision_cfg,

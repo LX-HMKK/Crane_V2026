@@ -10,6 +10,8 @@ serial:
 protocol:
   start_timeout_sec: 0.3
   send_interval_sec: 0.05
+  # 两路相机推理结果的最大采集时间差，超过时不组合下发
+  pair_max_skew_sec: 0.15
 cameras:
   bean:
     device: /dev/crane_cam_beans

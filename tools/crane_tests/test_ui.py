@@ -13,8 +13,8 @@ import pytest
 import yaml
 from unittest.mock import MagicMock
 
-from models.camera import MockCamera
-from models.config_binding import ConfigBinding
+from models.devices.camera import MockCamera
+from models.config.config_binding import ConfigBinding
 from models.ui import (
     CalibrationUI,
     CompetitionUI,
@@ -83,21 +83,24 @@ def _mock_tkinter_and_pil(monkeypatch):
         return m
 
     # CameraViewer (base class) imports tk under its own module.
-    monkeypatch.setattr("models.camera_viewer.tk.Tk", MagicMock)
-    monkeypatch.setattr("models.camera_viewer.tk.Frame", _widget_mock)
-    monkeypatch.setattr("models.camera_viewer.tk.Label", _widget_mock)
-    monkeypatch.setattr("models.camera_viewer.ImageTk.PhotoImage", MagicMock)
-    monkeypatch.setattr("models.camera_viewer.Image.fromarray", MagicMock)
+    monkeypatch.setattr("models.ui.viewer.tk.Tk", MagicMock)
+    monkeypatch.setattr("models.ui.viewer.tk.Frame", _widget_mock)
+    monkeypatch.setattr("models.ui.viewer.tk.Label", _widget_mock)
+    monkeypatch.setattr("models.ui.viewer.ImageTk.PhotoImage", MagicMock)
+    monkeypatch.setattr("models.ui.viewer.Image.fromarray", MagicMock)
 
     # CalibrationUI still creates control widgets via its own tk import.
-    monkeypatch.setattr("models.ui.tk.Tk", MagicMock)
-    monkeypatch.setattr("models.ui.tk.Frame", _widget_mock)
-    monkeypatch.setattr("models.ui.tk.Label", _widget_mock)
-    monkeypatch.setattr("models.ui.tk.Button", _widget_mock)
-    monkeypatch.setattr("models.ui.tk.Scale", _widget_mock)
-    monkeypatch.setattr("models.ui.tk.IntVar", MagicMock)
-    monkeypatch.setattr("models.ui.ImageTk.PhotoImage", MagicMock)
-    monkeypatch.setattr("models.ui.Image.fromarray", MagicMock)
+    monkeypatch.setattr("models.ui.calibration.tk.Tk", MagicMock)
+    monkeypatch.setattr("models.ui.calibration.tk.Frame", _widget_mock)
+    monkeypatch.setattr("models.ui.calibration.tk.Label", _widget_mock)
+    monkeypatch.setattr("models.ui.calibration.tk.Button", _widget_mock)
+    monkeypatch.setattr("models.ui.calibration.tk.Scale", _widget_mock)
+    monkeypatch.setattr("models.ui.calibration.tk.IntVar", MagicMock)
+    monkeypatch.setattr("models.ui.calibration.ImageTk.PhotoImage", MagicMock)
+    monkeypatch.setattr("models.ui.calibration.Image.fromarray", MagicMock)
+    monkeypatch.setattr("models.ui.competition.tk.Button", _widget_mock)
+    monkeypatch.setattr("models.ui.competition.tk.Frame", _widget_mock)
+    monkeypatch.setattr("models.ui.competition.tk.Label", _widget_mock)
 
 
 def test_ui_saves_lines_on_explicit_save(tmp_path):
@@ -173,6 +176,27 @@ def test_draw_detections_accepts_dict_and_list_names(tmp_path, names):
     ui._draw_detections(frame, dets, names)
 
 
+def test_display_keeps_only_highest_confidence_detection_per_zone(tmp_path):
+    ui = CalibrationUI(str(_write_cfg(tmp_path)), MagicMock(), MagicMock())
+    bean_dets = [
+        [20, 20, 40, 40, 0.40, 0],
+        [30, 20, 50, 40, 0.95, 1],  # same bean zone; this one wins
+        [150, 20, 170, 40, 0.80, 0],
+    ]
+    digit_dets = [
+        [20, 20, 40, 40, 0.90, 0],
+        [30, 20, 50, 40, 0.70, 1],
+        [220, 20, 240, 40, 0.85, 2],
+    ]
+
+    assert ui._select_zone_detections(bean_dets, "bean") == [
+        bean_dets[1], bean_dets[2]
+    ]
+    assert ui._select_zone_detections(digit_dets, "digit") == [
+        digit_dets[0], digit_dets[2]
+    ]
+
+
 def test_draw_model_overlay_runs_infer_and_draws(tmp_path):
     cfg_path = _write_cfg(tmp_path)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
@@ -199,7 +223,7 @@ def test_init_window_headless_fallback(tmp_path, monkeypatch):
     def raise_tcl_error(*args, **kwargs):
         raise tk.TclError("no display name")
 
-    monkeypatch.setattr("models.camera_viewer.tk.Tk", raise_tcl_error)
+    monkeypatch.setattr("models.ui.viewer.tk.Tk", raise_tcl_error)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert ui._window_ok is False
 
@@ -291,7 +315,7 @@ def test_competition_starts_one_capture_worker_per_camera(tmp_path, monkeypatch)
         def is_alive(self):
             return False
 
-    monkeypatch.setattr("models.ui.threading.Thread", RecordingThread)
+    monkeypatch.setattr("models.ui.competition.threading.Thread", RecordingThread)
     ui = CompetitionUI(
         str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
         root=MagicMock(), start_serial=False,
@@ -325,7 +349,7 @@ def test_calibration_starts_one_inference_worker_per_loaded_model(tmp_path, monk
         def is_alive(self):
             return False
 
-    monkeypatch.setattr("models.ui.threading.Thread", RecordingThread)
+    monkeypatch.setattr("models.ui.calibration.threading.Thread", RecordingThread)
     ui = CalibrationUI(
         str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock()
     )
@@ -359,17 +383,19 @@ def test_competition_capture_worker_submits_latest_frame_for_inference(
     submitted = []
     original_submit = ui._submit_frame_for_inference
 
-    def submit_and_stop(mode, frame):
-        submitted.append((mode, frame))
-        original_submit(mode, frame)
+    def submit_and_stop(mode, frame, **metadata):
+        submitted.append((mode, frame, metadata))
+        original_submit(mode, frame, **metadata)
         ui._capture_stop.set()
 
     monkeypatch.setattr(ui, "_submit_frame_for_inference", submit_and_stop)
     ui._capture_worker("bean", cam_bean)
 
     cam_bean.capture.assert_called_once()
-    assert [mode for mode, _frame in submitted] == ["bean"]
+    assert [mode for mode, _frame, _metadata in submitted] == ["bean"]
     assert submitted[0][1] is raw_bean
+    assert submitted[0][2]["capture_sequence"] == 1
+    assert submitted[0][2]["captured_at"] is not None
     assert ui._capture_sequences["bean"] == 1
     # The capture slot and inference slot must never share mutable frame data.
     assert not np.shares_memory(ui._infer_pending["bean"], raw_bean)
@@ -409,7 +435,11 @@ def test_competition_renders_only_the_active_camera(tmp_path, monkeypatch):
 
     # Only the active camera is queried; the other camera is never consulted
     # as a fallback.
-    assert queried == [("bean", ("ok", frame))]
+    assert len(queried) == 1
+    assert queried[0][0] == "bean"
+    assert queried[0][1][0] == "ok"
+    assert not np.shares_memory(queried[0][1][1], frame)
+    assert np.all(frame == 0)
     # A real frame is rendered, not an offline placeholder.
     assert len(shown) == 1
 
@@ -428,7 +458,7 @@ def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
         MagicMock(),
         task_gen=task_gen,
     )
-    ui._task_update_interval = 0.0
+    ui._result_controller.update_interval = 0.0
     ui._latest_dets = {"bean": [], "digit": []}
 
     with caplog.at_level(logging.ERROR):
@@ -442,7 +472,7 @@ def test_competition_failure_log_is_rate_limited(tmp_path, caplog):
     assert len(errors) == 1
 
 
-def test_competition_result_update_log_is_rate_limited(tmp_path, caplog, monkeypatch):
+def test_competition_result_update_log_is_rate_limited(tmp_path, caplog):
     import logging
 
     cfg_path = _write_cfg(tmp_path)
@@ -450,13 +480,11 @@ def test_competition_result_update_log_is_rate_limited(tmp_path, caplog, monkeyp
         str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
         start_serial=False,
     )
-    timestamps = iter((10.0, 10.5, 11.1))
-    monkeypatch.setattr("models.ui.time.monotonic", lambda: next(timestamps))
-
     with caplog.at_level(logging.INFO):
-        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
-        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
-        ui._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0)
+        controller = ui._result_controller
+        controller._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0, 10.0)
+        controller._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0, 10.5)
+        controller._log_result_update((1, 2, 3, 1, 2, 3, 4, 5), 0, 11.1)
 
     updates = [
         record for record in caplog.records if "Result updated" in record.message
@@ -479,7 +507,7 @@ def test_competition_limits_task_updates_to_serial_interval(tmp_path, monkeypatc
     )
     ui._latest_dets = {"bean": [], "digit": []}
     timestamps = iter((10.0, 10.02, 10.06))
-    monkeypatch.setattr("models.ui.time.monotonic", lambda: next(timestamps))
+    monkeypatch.setattr("models.ui.competition.time.monotonic", lambda: next(timestamps))
 
     ui._on_inference_done("bean", [])
     ui._on_inference_done("digit", [])
@@ -510,7 +538,7 @@ def test_initial_mode_creates_only_bean_sliders(tmp_path, monkeypatch):
         created.append(True)
         return MagicMock()
 
-    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    monkeypatch.setattr("models.ui.calibration.tk.Scale", mock_scale)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert ui.mode == "bean"
     assert len(created) == 2
@@ -524,7 +552,7 @@ def test_switching_mode_recreates_correct_trackbars(tmp_path, monkeypatch):
         created.append(True)
         return MagicMock()
 
-    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    monkeypatch.setattr("models.ui.calibration.tk.Scale", mock_scale)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     created.clear()
 
@@ -547,7 +575,7 @@ def test_button_click_switches_mode(tmp_path, monkeypatch):
         commands[text] = kwargs.get("command")
         return MagicMock()
 
-    monkeypatch.setattr("models.ui.tk.Button", mock_button)
+    monkeypatch.setattr("models.ui.calibration.tk.Button", mock_button)
     ui = CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert ui.mode == "bean"
 
@@ -625,7 +653,7 @@ def test_run_calibration_uses_empty_frame_when_camera_missing(
     def raise_runtime_error(*args, **kwargs):
         raise RuntimeError("camera unavailable")
 
-    monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
+    monkeypatch.setattr("models.devices.camera.Camera.__init__", raise_runtime_error)
 
     mock_ui_class = MagicMock()
     monkeypatch.setattr("calibrate.CalibrationUI", mock_ui_class)
@@ -649,7 +677,7 @@ def test_run_calibration_opens_serial_port_by_default(tmp_path, monkeypatch):
     def raise_runtime_error(*args, **kwargs):
         raise RuntimeError("camera unavailable")
 
-    monkeypatch.setattr("models.camera.Camera.__init__", raise_runtime_error)
+    monkeypatch.setattr("models.devices.camera.Camera.__init__", raise_runtime_error)
     monkeypatch.setattr("calibrate.CalibrationUI", MagicMock())
 
     opened = {}
@@ -738,7 +766,7 @@ def test_slider_to_uses_native_camera_width(tmp_path, monkeypatch):
         created.append(kwargs)
         return MagicMock()
 
-    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    monkeypatch.setattr("models.ui.calibration.tk.Scale", mock_scale)
     cam_bean = MagicMock()
     cam_bean.width = 1280
     cam_bean.height = 720
@@ -763,7 +791,7 @@ def test_sliders_hide_value_and_use_large_handles(tmp_path, monkeypatch):
         created.append(kwargs)
         return MagicMock()
 
-    monkeypatch.setattr("models.ui.tk.Scale", mock_scale)
+    monkeypatch.setattr("models.ui.calibration.tk.Scale", mock_scale)
     CalibrationUI(str(cfg_path), MagicMock(), MagicMock())
     assert len(created) == 2
     for kwargs in created:
@@ -1055,7 +1083,9 @@ def test_competition_update_frame_shows_live_frame_when_ok(tmp_path, monkeypatch
     finally:
         ui._running = False
 
-    assert shown == [frame]
+    assert len(shown) == 1
+    assert not np.shares_memory(shown[0], frame)
+    assert np.all(frame == 0)
 
 
 def test_competition_update_frame_waiting_uses_neutral_text_not_offline(
@@ -1265,15 +1295,16 @@ def test_competition_gate_off_resets_last_frame_for_sticky_resume(tmp_path):
         str(cfg_path), MagicMock(), MagicMock(), MagicMock(), MagicMock(),
         serial_thread=serial, root=MagicMock(), start_serial=False,
     )
-    ui._last_frame = (1, 2, 3, 4, 5, 1, 2, 3)
-    ui._last_task_update_at = 123.0
-    ui._consecutive_failures = 7
+    controller = ui._result_controller
+    controller._last_frame = (1, 2, 3, 4, 5, 1, 2, 3)
+    controller._last_updated_at = 123.0
+    controller._consecutive_failures = 7
 
     ui._on_inference_gate_closed()
 
-    assert ui._last_frame is None
-    assert ui._last_task_update_at is None
-    assert ui._consecutive_failures == 0
+    assert controller._last_frame is None
+    assert controller._last_updated_at is None
+    assert controller.consecutive_failures == 0
     assert serial.current_frame is None
 
 
@@ -1293,13 +1324,13 @@ def test_competition_debug_forced_does_not_write_serial(tmp_path):
         task_gen=task_gen, serial_thread=serial, root=MagicMock(), start_serial=False,
     )
     ui._latest_dets = {"bean": [["bean"]], "digit": [["digit"]]}
-    ui._consecutive_failures = 3
+    ui._result_controller._consecutive_failures = 3
     serial.current_frame = None
 
     ui._update_task_from_latest_detections(debug_forced=True)
 
     assert serial.current_frame is None
-    assert ui._consecutive_failures == 3
+    assert ui._result_controller.consecutive_failures == 3
     assert ui._zone_results["bean"] == {1: (1, "detected", 0.9)}
 
 
@@ -1364,7 +1395,9 @@ def test_competition_idle_update_frame_suppresses_overlay(tmp_path, monkeypatch)
         ui._running = False
 
     assert draw_calls == []
-    assert shown == [frame]
+    assert len(shown) == 1
+    assert not np.shares_memory(shown[0], frame)
+    assert np.all(frame == 0)
 
 
 def test_competition_debug_on_drops_serial_cache(tmp_path):

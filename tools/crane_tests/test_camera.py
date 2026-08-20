@@ -8,12 +8,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 import numpy as np
 import cv2
 from unittest.mock import patch, MagicMock
-from models.camera import Camera
+from models.devices.camera import Camera
 
 
 def test_camera_capture_returns_bgr_frame():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (True, fake_frame)
         instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
@@ -28,7 +28,7 @@ def test_camera_capture_returns_bgr_frame():
 
 def test_camera_enables_auto_exposure_by_default():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (True, fake_frame)
         instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
@@ -44,7 +44,7 @@ def test_camera_enables_auto_exposure_by_default():
 
 def test_camera_can_disable_auto_exposure():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (True, fake_frame)
         instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
@@ -60,7 +60,7 @@ def test_camera_can_disable_auto_exposure():
 
 def test_camera_converts_grayscale_input_to_bgr():
     gray_frame = np.zeros((480, 640), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (True, gray_frame)
         instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
@@ -76,7 +76,7 @@ def test_camera_converts_grayscale_input_to_bgr():
 def test_camera_grayscale_option_outputs_three_channel_gray():
     color_frame = np.zeros((480, 640, 3), dtype=np.uint8)
     color_frame[:, :] = (10, 20, 30)  # BGR
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (True, color_frame)
         instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
@@ -96,9 +96,9 @@ def test_camera_v4l2_timeout_falls_back_without_blocking():
     cam = Camera.__new__(Camera)
     cam.device_index = "/dev/video0"
 
-    with patch("models.camera.shutil.which", return_value="/usr/bin/v4l2-ctl"), \
+    with patch("models.devices.camera.shutil.which", return_value="/usr/bin/v4l2-ctl"), \
          patch(
-             "models.camera.subprocess.run",
+             "models.devices.camera.subprocess.run",
              side_effect=TimeoutExpired("v4l2-ctl", 2.0),
          ):
         assert cam._set_v4l2_control("auto_exposure", 3) is False
@@ -106,7 +106,7 @@ def test_camera_v4l2_timeout_falls_back_without_blocking():
 
 def test_camera_reopens_after_sustained_read_failures():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as factory:
+    with patch("models.devices.camera.cv2.VideoCapture") as factory:
         bad = MagicMock()
         bad.read.return_value = (False, None)
         bad.isOpened.return_value = True
@@ -131,7 +131,7 @@ def test_camera_reopens_after_sustained_read_failures():
 
 def test_camera_transient_single_failure_does_not_reopen():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.side_effect = [(False, None), (True, fake_frame)]
         instance.isOpened.return_value = True
@@ -149,7 +149,7 @@ def test_camera_transient_single_failure_does_not_reopen():
 
 
 def test_camera_no_reopen_when_reconnect_disabled():
-    with patch("models.camera.cv2.VideoCapture") as MockCap:
+    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
         instance = MagicMock()
         instance.read.return_value = (False, None)
         instance.isOpened.return_value = True
@@ -166,7 +166,7 @@ def test_camera_no_reopen_when_reconnect_disabled():
 
 def test_camera_reopen_reapplies_capture_parameters():
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as factory:
+    with patch("models.devices.camera.cv2.VideoCapture") as factory:
         bad = MagicMock()
         bad.read.return_value = (False, None)
         bad.isOpened.return_value = True
@@ -214,7 +214,7 @@ def test_camera_release_and_setters_safe_when_cap_none():
 def test_camera_reopen_replays_runtime_exposure_change():
     """Exposure changed via the settings UI must survive a reconnect."""
     fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.camera.cv2.VideoCapture") as factory:
+    with patch("models.devices.camera.cv2.VideoCapture") as factory:
         bad = MagicMock()
         bad.read.return_value = (False, None)
         bad.isOpened.return_value = True

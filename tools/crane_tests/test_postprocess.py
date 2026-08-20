@@ -5,8 +5,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models import yolo11_postprocess
-from models.yolo11_postprocess import _make_anchors, letterbox, postprocess, scale_coords
+from models.inference import yolo11_postprocess
+from models.inference.yolo11_postprocess import _make_anchors, letterbox, postprocess, scale_coords
 
 
 def test_letterbox_preserves_aspect_ratio():
@@ -179,10 +179,12 @@ def make_yolo11_outputs(dets, cfg):
         lvl, idx = chosen
         stride, h, w, anchors = lvl["stride"], lvl["h"], lvl["w"], lvl["anchors"]
         ax, ay = anchors[idx]
-        l = ax - x1
-        t = ay - y1
-        r = x2 - ax
-        b = y2 - ay
+        # The model predicts DFL distances in feature-map cells; postprocess
+        # converts them back to input pixels with this head's stride.
+        l = (ax - x1) / stride
+        t = (ay - y1) / stride
+        r = (x2 - ax) / stride
+        b = (y2 - ay) / stride
 
         dfl = np.concatenate(
             [_encode_dfl_distance(d, reg_max) for d in (l, t, r, b)]
@@ -213,8 +215,9 @@ def test_postprocess_decodes_single_detection():
     assert result.shape[0] == 1
     assert int(result[0, 5]) == 1
     assert result[0, 4] > 0.9
-    # Tolerance for DFL quantization.
-    np.testing.assert_allclose(result[0, :4], [300, 300, 320, 320], atol=2.0)
+    # Synthetic logits use one whole DFL bin; with stride=8 this quantizes an
+    # edge by up to 4 px, plus a small softmax tail from the remaining bins.
+    np.testing.assert_allclose(result[0, :4], [300, 300, 320, 320], atol=5.0)
 
 
 def test_postprocess_class_aware_nms_keeps_overlapping_different_classes():
@@ -273,4 +276,4 @@ def test_postprocess_rectangular_imgsz():
     outputs = make_yolo11_outputs(dets, cfg)
     result = postprocess(outputs, cfg)
     assert result.shape[0] == 1
-    np.testing.assert_allclose(result[0, :4], [300, 150, 320, 170], atol=2.0)
+    np.testing.assert_allclose(result[0, :4], [300, 150, 320, 170], atol=5.0)

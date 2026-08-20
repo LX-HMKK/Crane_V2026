@@ -15,7 +15,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
 import yaml
-from models.serial_port import open_serial_port
+from models.devices.serial_port import open_serial_port
 
 
 # Default simulated result:

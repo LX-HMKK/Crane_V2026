@@ -3,8 +3,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.mapping import DEFAULT_BEAN_TO_DIGIT, bean_name_to_digit
-from models.task_generator import TaskGenerator
+from models.domain.mapping import DEFAULT_BEAN_TO_DIGIT, bean_name_to_digit
+from models.domain.task_generator import TaskGenerator
+from models.domain.zones import ZoneLayout
 
 
 def digit_det(zone, digit, conf=0.9):
@@ -227,7 +228,7 @@ def test_generate_task_non_numeric_digit_name():
 
 
 def test_default_mapping_and_helper():
-    # Exercise models.mapping from the task generator side.
+    # Exercise models.domain.mapping from the task generator side.
     assert bean_name_to_digit("yellow") == 1
     assert bean_name_to_digit("green") == 2
     assert bean_name_to_digit("white") == 3
@@ -330,3 +331,14 @@ def test_generate_frame_keeps_generate_unchanged():
     result, reason = gen.generate(bean_dets, digit_dets)
     assert result == (4, 5, 6)
     assert reason == "ok"
+
+
+def test_zone_layout_is_shared_boundary_and_selection_rule():
+    layout = ZoneLayout(make_lines())
+    assert layout.bean_zone(213) == 2
+    assert layout.digit_zone(250) == 6
+
+    selected = layout.select_best(
+        [bean_det(1, 2, conf=0.5), bean_det(1, 1, conf=0.9)], "bean"
+    )
+    assert selected[1][5] == 1

@@ -1,79 +1,19 @@
-from models.mapping import bean_name_to_digit
+from models.domain.mapping import bean_name_to_digit
+from models.domain.zones import ZoneLayout
 
 
 class TaskGenerator:
     """Convert bean/digit detections into task results."""
 
-    _BEAN_KEYS = ("left_x", "right_x")
-    _DIGIT_KEYS = ("x1", "x2", "x3", "x4")
-
     def __init__(self, mapping, lines, bean_names, digit_names):
         self.mapping = mapping
         self.lines = lines
+        self.zones = ZoneLayout(lines)
         self.bean_names = bean_names
         self.digit_names = digit_names
 
-    @staticmethod
-    def _is_number(value):
-        return isinstance(value, (int, float))
-
     def _validate_lines(self):
-        if not isinstance(self.lines, dict):
-            return "invalid lines config"
-        bean = self.lines.get("bean")
-        digit = self.lines.get("digit")
-        if not isinstance(bean, dict) or not all(k in bean for k in self._BEAN_KEYS):
-            return "invalid bean line config"
-        if not isinstance(digit, dict) or not all(k in digit for k in self._DIGIT_KEYS):
-            return "invalid digit line config"
-        if not all(self._is_number(bean[k]) for k in self._BEAN_KEYS):
-            return "invalid bean line coordinate"
-        if not all(self._is_number(digit[k]) for k in self._DIGIT_KEYS):
-            return "invalid digit line coordinate"
-        if any(bean[k] < 0 for k in self._BEAN_KEYS):
-            return "bean line coordinates must be non-negative"
-        if any(digit[k] < 0 for k in self._DIGIT_KEYS):
-            return "digit line coordinates must be non-negative"
-        if bean["left_x"] >= bean["right_x"]:
-            return "bean left_x must be less than right_x"
-        xs = [digit[k] for k in self._DIGIT_KEYS]
-        if not all(xs[i] < xs[i + 1] for i in range(len(xs) - 1)):
-            return "digit x1..x4 must be strictly increasing"
-        return None
-
-    @staticmethod
-    def _validate_detection(det):
-        if not isinstance(det, (list, tuple)) or len(det) < 6:
-            return "malformed detection"
-        return None
-
-    def _bean_zone(self, cx):
-        # Strict < is intentional: detections exactly on a boundary line fall
-        # into the zone to the right of that line.
-        left = self.lines["bean"]["left_x"]
-        right = self.lines["bean"]["right_x"]
-        if cx < left:
-            return 1
-        if cx < right:
-            return 2
-        return 3
-
-    def _digit_zone(self, cx, cy):
-        # 5 placement baskets arranged left-to-right; partition by x only.
-        xs = [self.lines["digit"][k] for k in self._DIGIT_KEYS]
-        if cx < xs[0]:
-            return 4
-        if cx < xs[1]:
-            return 5
-        if cx < xs[2]:
-            return 6
-        if cx < xs[3]:
-            return 7
-        return 8
-
-    def _center(self, det):
-        x1, y1, x2, y2 = det[:4]
-        return (x1 + x2) / 2, (y1 + y2) / 2
+        return self.zones.validate()
 
     def _bean_color_code(self, name):
         """Map bean class name to protocol color code (1=yellow, 2=green, 3=white)."""
@@ -81,29 +21,17 @@ class TaskGenerator:
 
     def _aggregate_beans(self, bean_dets):
         """Return {zone: det} for pickup zones 1-3, keeping highest-confidence detection."""
-        best = {1: None, 2: None, 3: None}
-        for det in bean_dets:
-            err = self._validate_detection(det)
-            if err:
-                return None, err
-            cx, cy = self._center(det)
-            zone = self._bean_zone(cx)
-            if best[zone] is None or det[4] > best[zone][4]:
-                best[zone] = det
-        return best, None
+        try:
+            return self.zones.select_best(bean_dets, "bean"), None
+        except ValueError as exc:
+            return None, str(exc)
 
     def _aggregate_digits(self, digit_dets):
         """Return {zone: det} for placement zones 4-8, keeping highest-confidence detection."""
-        best = {4: None, 5: None, 6: None, 7: None, 8: None}
-        for det in digit_dets:
-            err = self._validate_detection(det)
-            if err:
-                return None, err
-            cx, cy = self._center(det)
-            zone = self._digit_zone(cx, cy)
-            if best[zone] is None or det[4] > best[zone][4]:
-                best[zone] = det
-        return best, None
+        try:
+            return self.zones.select_best(digit_dets, "digit"), None
+        except ValueError as exc:
+            return None, str(exc)
 
     def generate(self, bean_dets, digit_dets):
         """Legacy triplet: return (p1, p2, p3) placement zones for targets 1,2,3.
@@ -282,7 +210,7 @@ class TaskGenerator:
             *payload* is an 8-tuple or ``None``, and *results* dicts map
             ``zone -> (value, 'detected'|'inferred', confidence)``.
         """
-        from models.logic_completion import count_inferred, validate_and_complete
+        from models.domain.logic_completion import count_inferred, validate_and_complete
 
         err = self._validate_lines()
         if err:

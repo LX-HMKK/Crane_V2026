@@ -1,4 +1,4 @@
-from models.yolo11_model import Yolo11Model
+from models.inference.yolo11_model import Yolo11Model
 
 
 class DigitModel(Yolo11Model):
