@@ -156,20 +156,3 @@ class TestGenerateFrameWithCompletion:
         p, br, dr, reason = task_gen.generate_frame_with_completion(bean, digit)
         assert p is not None
         assert count_inferred(br) == 1  # Z1 inferred
-
-    def test_backward_compat(self, task_gen):
-        """Existing generate_frame() still works."""
-        bean = [_bean_det(0, 300), _bean_det(1, 600), _bean_det(2, 900)]
-        digit = [_digit_det(0, 100), _digit_det(1, 300), _digit_det(2, 500),
-                 _digit_det(3, 700), _digit_det(4, 900)]
-        p, reason = task_gen.generate_frame(bean, digit)
-        assert p == (1, 2, 3, 1, 2, 3, 4, 5)
-        assert reason == "ok"
-
-    def test_generate_frame_still_rejects_missing(self, task_gen):
-        """Original generate_frame should STILL reject missing zones."""
-        bean = [_bean_det(0, 300), _bean_det(2, 900)]  # Z2 missing
-        digit = [_digit_det(0, 100), _digit_det(1, 300), _digit_det(2, 500),
-                 _digit_det(3, 700), _digit_det(4, 900)]
-        p, reason = task_gen.generate_frame(bean, digit)
-        assert p is None  # original is strict

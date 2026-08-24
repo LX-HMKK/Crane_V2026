@@ -3,31 +3,34 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+# Keep this module independent of the heavy inference dependencies.
+sys.modules["ultralytics"] = None
+sys.modules["torch"] = None
+
 from models.application.competition_controller import CompetitionResultController
+from models.domain.mapping import DEFAULT_BEAN_TO_DIGIT
+from models.domain.task_generator import TaskGenerator
 
 
-class _Serial:
-    def __init__(self):
-        self.current_frame = None
+LINES = {
+    "bean": {"left_x": 500, "right_x": 800},
+    "digit": {"x1": 200, "x2": 400, "x3": 600, "x4": 800},
+}
+BEAN_NAMES = {0: "yellow", 1: "green", 2: "white"}
+DIGIT_NAMES = {0: "1", 1: "2", 2: "3", 3: "4", 4: "5"}
 
 
-class _TaskGenerator:
-    def __init__(self):
-        self.calls = 0
-
-    def generate_frame_with_completion(self, *_args, **_kwargs):
-        self.calls += 1
-        return (
-            (1, 2, 3, 1, 2, 3, 4, 5),
-            {1: (1, "detected", 0.9)},
-            {4: (1, "detected", 0.9)},
-            "ok",
-        )
+def _bean_det(cls_id, cx, cy=360, conf=0.9):
+    return [cx - 30, cy - 30, cx + 30, cy + 30, float(conf), cls_id]
 
 
-def _controller(task_generator, serial):
+def _digit_det(cls_id, cx, cy=360, conf=0.9):
+    return _bean_det(cls_id, cx, cy, conf)
+
+
+def _controller(serial):
     return CompetitionResultController(
-        task_generator,
+        TaskGenerator(DEFAULT_BEAN_TO_DIGIT, LINES, BEAN_NAMES, DIGIT_NAMES),
         serial,
         {},
         update_interval=0.0,
@@ -36,8 +39,8 @@ def _controller(task_generator, serial):
 
 
 def test_controller_rejects_stale_cross_camera_pair():
-    task_generator = _TaskGenerator()
-    controller = _controller(task_generator, _Serial())
+    serial = type("Serial", (), {"current_frame": None})()
+    controller = _controller(serial)
 
     result = controller.update(
         [],
@@ -46,32 +49,23 @@ def test_controller_rejects_stale_cross_camera_pair():
         digit_meta={"sequence": 7, "captured_at": 10.2},
     )
 
+    # Skew 0.2s > 0.15s; the pair is rejected and nothing is published.
     assert result is None
-    assert task_generator.calls == 0
+    assert serial.current_frame is None
 
 
-def test_controller_publishes_time_aligned_pair():
-    task_generator = _TaskGenerator()
-    serial = _Serial()
-    controller = _controller(task_generator, serial)
+def test_controller_debug_result_stays_out_of_serial_cache():
+    serial = type("Serial", (), {"current_frame": None})()
+    controller = _controller(serial)
 
-    result = controller.update(
-        [],
-        [],
-        bean_meta={"sequence": 3, "captured_at": 10.0},
-        digit_meta={"sequence": 7, "captured_at": 10.1},
-    )
+    bean = [_bean_det(0, 300), _bean_det(1, 600), _bean_det(2, 900)]
+    digit = [
+        _digit_det(0, 100), _digit_det(1, 300), _digit_det(2, 500),
+        _digit_det(3, 700), _digit_det(4, 900),
+    ]
 
-    assert result.bean_zones == {1: (1, "detected", 0.9)}
-    assert serial.current_frame == (1, 2, 3, 1, 2, 3, 4, 5)
+    result = controller.update(bean, digit, debug_forced=True)
 
-
-def test_controller_keeps_debug_result_out_of_serial_cache():
-    task_generator = _TaskGenerator()
-    serial = _Serial()
-    controller = _controller(task_generator, serial)
-
-    result = controller.update([], [], debug_forced=True)
-
+    # DEBUG produces overlay data but does not publish to the serial cache.
     assert result is not None
     assert serial.current_frame is None

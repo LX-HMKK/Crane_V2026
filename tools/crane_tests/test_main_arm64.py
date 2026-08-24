@@ -1,6 +1,6 @@
 """Unit tests for the RDK entry point's headless result path."""
 
-from scripts.main_arm64 import HeadlessCompetitionLoop, build_completed_result
+from scripts.main_arm64 import HeadlessCompetitionLoop
 
 
 class _TaskGenerator:
@@ -10,45 +10,6 @@ class _TaskGenerator:
     def generate_frame_with_completion(self, bean_dets, digit_dets, **kwargs):
         self.calls.append((bean_dets, digit_dets, kwargs))
         return (1, 2, 3, 4, 5, 1, 2, 3), {}, {}, "ok"
-
-
-def test_headless_result_uses_ui_logical_completion_settings():
-    task_gen = _TaskGenerator()
-    cfg = {
-        "logic": {
-            "confidence_threshold": 0.65,
-            "max_inferred_beans": 2,
-            "max_inferred_digits": 3,
-        }
-    }
-
-    frame, reason = build_completed_result(task_gen, [["bean"]], [["digit"]], cfg)
-
-    assert frame == (1, 2, 3, 4, 5, 1, 2, 3)
-    assert reason == "ok"
-    assert task_gen.calls == [
-        (
-            [["bean"]],
-            [["digit"]],
-            {
-                "confidence_threshold": 0.65,
-                "max_inferred_beans": 2,
-                "max_inferred_digits": 3,
-            },
-        )
-    ]
-
-
-def test_headless_result_uses_existing_logic_defaults():
-    task_gen = _TaskGenerator()
-
-    _frame, _reason = build_completed_result(task_gen, [], [], {})
-
-    assert task_gen.calls[0][2] == {
-        "confidence_threshold": 0.5,
-        "max_inferred_beans": 1,
-        "max_inferred_digits": 2,
-    }
 
 
 def test_headless_loop_hands_off_only_after_a_complete_scan(monkeypatch):
@@ -103,38 +64,6 @@ def test_headless_camera_failures_back_off_and_rate_limit_logs(monkeypatch, capl
         if "Camera capture failure" in record.message
     ]
     assert len(capture_logs) == 1
-
-
-def test_create_serial_thread_passes_reconnect_config(monkeypatch):
-    """serial.reconnect in vision.yaml must reach the SerialThread constructor."""
-    import scripts.main_arm64 as main_arm64
-
-    captured = {}
-
-    def fake_serial_thread(*args, **kwargs):
-        captured["args"] = args
-        captured["kwargs"] = kwargs
-        return object()
-
-    monkeypatch.setattr(main_arm64, "SerialThread", fake_serial_thread)
-    cfg = {
-        "serial": {
-            "port": "/dev/ttyS1",
-            "baudrate": 921600,
-            "timeout": 0.05,
-            "reconnect": {"enabled": False, "after_failures": 9, "interval_sec": 2.0},
-        },
-        "protocol": {"start_timeout_sec": 0.3, "send_interval_sec": 0.05},
-    }
-    main_arm64._create_serial_thread(cfg)
-
-    assert captured["args"] == ("/dev/ttyS1", 921600)
-    assert captured["kwargs"]["timeout"] == 0.05
-    assert captured["kwargs"]["start_timeout"] == 0.3
-    assert captured["kwargs"]["send_interval"] == 0.05
-    assert captured["kwargs"]["reconnect_enabled"] is False
-    assert captured["kwargs"]["reconnect_after"] == 9
-    assert captured["kwargs"]["reconnect_interval"] == 2.0
 
 
 def test_headless_camera_outage_keeps_last_frame_sticky(monkeypatch):

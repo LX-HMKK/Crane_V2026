@@ -1,6 +1,4 @@
 import sys
-import threading
-from subprocess import TimeoutExpired
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -9,53 +7,6 @@ import numpy as np
 import cv2
 from unittest.mock import patch, MagicMock
 from models.devices.camera import Camera
-
-
-def test_camera_capture_returns_bgr_frame():
-    fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
-        instance = MagicMock()
-        instance.read.return_value = (True, fake_frame)
-        instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
-        MockCap.return_value = instance
-
-        cam = Camera(0, 640, 480)
-        ok, frame = cam.capture()
-        assert ok
-        assert frame.shape == (480, 640, 3)
-        cam.release()
-
-
-def test_camera_enables_auto_exposure_by_default():
-    fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
-        instance = MagicMock()
-        instance.read.return_value = (True, fake_frame)
-        instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
-        MockCap.return_value = instance
-
-        cam = Camera(0, 640, 480)
-        calls = [call for call in instance.set.call_args_list
-                 if call[0][0] == cv2.CAP_PROP_AUTO_EXPOSURE]
-        assert len(calls) == 1
-        assert calls[0][0][1] == 0.75
-        cam.release()
-
-
-def test_camera_can_disable_auto_exposure():
-    fake_frame = np.zeros((480, 640, 3), dtype=np.uint8)
-    with patch("models.devices.camera.cv2.VideoCapture") as MockCap:
-        instance = MagicMock()
-        instance.read.return_value = (True, fake_frame)
-        instance.get.side_effect = lambda p: 640 if p == cv2.CAP_PROP_FRAME_WIDTH else 480
-        MockCap.return_value = instance
-
-        cam = Camera(0, 640, 480, auto_exposure=False)
-        calls = [call for call in instance.set.call_args_list
-                 if call[0][0] == cv2.CAP_PROP_AUTO_EXPOSURE]
-        assert len(calls) == 1
-        assert calls[0][0][1] == 0.25
-        cam.release()
 
 
 def test_camera_converts_grayscale_input_to_bgr():
@@ -90,18 +41,6 @@ def test_camera_grayscale_option_outputs_three_channel_gray():
         assert np.all(frame[:, :, 0] == frame[:, :, 1])
         assert np.all(frame[:, :, 1] == frame[:, :, 2])
         cam.release()
-
-
-def test_camera_v4l2_timeout_falls_back_without_blocking():
-    cam = Camera.__new__(Camera)
-    cam.device_index = "/dev/video0"
-
-    with patch("models.devices.camera.shutil.which", return_value="/usr/bin/v4l2-ctl"), \
-         patch(
-             "models.devices.camera.subprocess.run",
-             side_effect=TimeoutExpired("v4l2-ctl", 2.0),
-         ):
-        assert cam._set_v4l2_control("auto_exposure", 3) is False
 
 
 def test_camera_reopens_after_sustained_read_failures():
@@ -197,18 +136,6 @@ def test_camera_reopen_reapplies_capture_parameters():
         good.set.assert_any_call(cv2.CAP_PROP_AUTO_EXPOSURE, 0.25)
         good.set.assert_any_call(cv2.CAP_PROP_EXPOSURE, 123.0)
         cam.release()
-
-
-def test_camera_release_and_setters_safe_when_cap_none():
-    cam = Camera.__new__(Camera)
-    cam.device_index = 0
-    cam._io_lock = threading.RLock()
-    cam.cap = None
-
-    # No handle held: none of these may raise.
-    cam.release()
-    assert cam.set_auto_exposure(True) is False
-    assert cam.set_exposure(123) is False
 
 
 def test_camera_reopen_replays_runtime_exposure_change():

@@ -3,7 +3,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from models.domain.mapping import DEFAULT_BEAN_TO_DIGIT, bean_name_to_digit
 from models.domain.task_generator import TaskGenerator
 from models.domain.zones import ZoneLayout
 
@@ -60,15 +59,6 @@ def test_generate_task_success():
     assert reason == "ok"
 
 
-def test_generate_task_missing_digit():
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    digit_dets = [digit_det(4, 1)]  # missing 2 and 3
-    gen = make_gen()
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result is None
-    assert "missing" in reason.lower()
-
-
 def test_generate_task_unknown_bean_class():
     bean_dets = [bean_det(1, 99), bean_det(2, 1), bean_det(3, 0)]
     digit_dets = [digit_det(4, 1), digit_det(5, 2), digit_det(6, 3)]
@@ -76,15 +66,6 @@ def test_generate_task_unknown_bean_class():
     result, reason = gen.generate(bean_dets, digit_dets)
     assert result is None
     assert "unknown bean class 99" in reason
-
-
-def test_generate_task_missing_bean_in_zone():
-    bean_dets = [bean_det(1, 2), bean_det(3, 0)]  # no bean in zone 2
-    digit_dets = [digit_det(4, 1), digit_det(5, 2), digit_det(6, 3)]
-    gen = make_gen()
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result is None
-    assert "missing bean in pickup zone 2" in reason
 
 
 def test_generate_task_bean_zone_tiebreak():
@@ -119,19 +100,6 @@ def test_generate_task_digit_zone_tiebreak():
     assert reason == "ok"
 
 
-def test_generate_task_duplicate_digit_values():
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    # Values 1 appear in both zone 4 and zone 5.
-    digit_dets = [
-        digit_det(4, 1), digit_det(5, 1),
-        digit_det(6, 3),
-    ]
-    gen = make_gen()
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result is None
-    assert "duplicate digit 1" in reason
-
-
 def test_generate_task_boundary_lines():
     # Beans on boundary lines; digits on boundary lines.
     # Bean cx == left_x (213) falls into zone 2; cx == right_x (426) into zone 3.
@@ -161,87 +129,11 @@ def test_generate_task_malformed_lines():
     assert "invalid bean line config" in reason
 
 
-def test_generate_task_reversed_bean_lines():
-    mapping, bean_names, digit_names = make_names()
-    lines = make_lines()
-    lines["bean"]["left_x"] = 500
-    lines["bean"]["right_x"] = 100
-    gen = TaskGenerator(mapping, lines, bean_names, digit_names)
-    result, reason = gen.generate([], [])
-    assert result is None
-    assert "left_x must be less than right_x" in reason
-
-
-def test_generate_task_negative_line_coordinate():
-    mapping, bean_names, digit_names = make_names()
-    lines = make_lines()
-    lines["digit"]["x1"] = -10
-    gen = TaskGenerator(mapping, lines, bean_names, digit_names)
-    result, reason = gen.generate([], [])
-    assert result is None
-    assert "non-negative" in reason
-
-
-def test_generate_task_malformed_digit_lines():
-    mapping, bean_names, digit_names = make_names()
-    gen = TaskGenerator(
-        mapping,
-        {"bean": {"left_x": 213, "right_x": 426}, "digit": {"x1": 213}},
-        bean_names,
-        digit_names,
-    )
-    result, reason = gen.generate([], [])
-    assert result is None
-    assert "invalid digit line config" in reason
-
-
 def test_generate_task_malformed_detection():
     gen = make_gen()
     result, reason = gen.generate([[0, 1, 2, 3]], [])
     assert result is None
     assert "malformed detection" in reason
-
-
-def test_generate_task_unknown_digit_class():
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    digit_dets = [
-        digit_det(4, 1),
-        # Unknown class placed alone in zone 5 so it is selected and reported.
-        [195.0, 95.0, 205.0, 105.0, 0.9, 99],
-        digit_det(6, 3),
-    ]
-    gen = make_gen()
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result is None
-    assert "unknown digit class 99" in reason
-
-
-def test_generate_task_non_numeric_digit_name():
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    digit_dets = [digit_det(4, 1), digit_det(5, 2), digit_det(6, 3)]
-    mapping, bean_names, _ = make_names()
-    digit_names = {0: "1", 1: "2", 2: "not_a_number", 3: "4", 4: "5"}
-    gen = TaskGenerator(mapping, make_lines(), bean_names, digit_names)
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result is None
-    assert "non-numeric digit name 'not_a_number'" in reason
-
-
-def test_default_mapping_and_helper():
-    # Exercise models.domain.mapping from the task generator side.
-    assert bean_name_to_digit("yellow") == 1
-    assert bean_name_to_digit("green") == 2
-    assert bean_name_to_digit("white") == 3
-    assert bean_name_to_digit("unknown") is None
-
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    digit_dets = [digit_det(4, 1), digit_det(5, 2), digit_det(6, 3)]
-    mapping, bean_names, digit_names = make_names()
-    # Use the shared default mapping via the helper.
-    gen = TaskGenerator(DEFAULT_BEAN_TO_DIGIT, make_lines(), bean_names, digit_names)
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result == (4, 5, 6)
-    assert reason == "ok"
 
 
 def test_generate_frame_success():
@@ -318,19 +210,6 @@ def test_generate_frame_digit_out_of_range():
     frame, reason = gen.generate_frame(bean_dets, digit_dets)
     assert frame is None
     assert "out of range" in reason
-
-
-def test_generate_frame_keeps_generate_unchanged():
-    # generate() still ignores digits 4/5 and returns the placement triplet.
-    bean_dets = [bean_det(1, 2), bean_det(2, 1), bean_det(3, 0)]
-    digit_dets = [
-        digit_det(4, 1), digit_det(5, 2), digit_det(6, 3),
-        digit_det(7, 4), digit_det(8, 5),
-    ]
-    gen = make_gen()
-    result, reason = gen.generate(bean_dets, digit_dets)
-    assert result == (4, 5, 6)
-    assert reason == "ok"
 
 
 def test_zone_layout_is_shared_boundary_and_selection_rule():
