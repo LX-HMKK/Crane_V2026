@@ -100,59 +100,7 @@ flowchart TD
 
 **目录一览**：`assets` · `configs` · `data` · `docs` · `models` · `scripts` · `tests` · `tools`
 
-<details>
-<summary>📂 完整目录结构（点击展开）</summary>
-
-```text
-assets/            # 训练产物：.bin / .pt / .onnx + BPU 配置（beans.yaml / num.yaml）
-configs/           # 运行时配置：vision.yaml（唯一事实来源）+ 1024×600 备选
-data/              # 数据集（YOLO 格式，已 gitignore）
-docs/              # 部署与运行时文档
-  guides/          #   RDKx5_Bin_Inference.md — BPU 板端工作流
-                   #   vision_runtime.md       — 运行时入口、状态机与分区映射
-  reference/       #   CRANE_VISION_PROTOCOL.md — 串口硬件与通信协议
-                   #   conventions.md         — 数据集与资产命名规范
-  runbooks/        #   commands.md            — 完整命令清单
-                   #   rdk_service.md         — crane-vision.service 系统服务运维
-  images/          #   UI 界面预览截图
-models/            # 视觉运行时源码
-  application/                  # 运行时装配与入口共享助手
-    runtime.py
-  config/                        # 配置绑定
-    config_binding.py
-  devices/                       # 相机和串口设备访问
-    camera.py / serial_port.py
-  domain/                        # 分区聚合、映射与逻辑补全
-    mapping.py / task_generator.py / logic_completion.py
-  inference/                     # BPU / PyTorch 推理与 YOLO11 后处理
-    bpu_loader.py / yolo11_model.py / yolo11_postprocess.py
-    bean_model.py / digit_model.py / pt_model.py
-  ui/                            # Tkinter 界面，按职责拆分
-    viewer.py / calibration.py / competition.py
-scripts/           # 视觉运行时入口
-  main_arm64.py                 # RDK X5 竞赛模式入口（CompetitionUI）
-  main_amd64.py                 # x86 双相机 PyTorch 推理 + 逻辑补全（CompetitionUI，无串口）
-  watchdog.sh                   # main_arm64.py 自动重启脚本
-  install_crane_service.sh      # systemd 竞赛模式服务安装脚本
-tests/             # 独立功能测试脚本
-  calibrate.py                  # 校准 UI 入口
-  test_camera_view.py           # 双相机画面检查
-  test_inference_ui.py          # 推理 + 检测框叠加
-  test_serial_loopback.py       # 串口回环/协议测试
-  test_logic_completion.py      # 逻辑补全模块测试
-  test_settings_controls.py     # 校准控件单元测试
-  test_ui_completion.py         # 推断标签渲染测试
-  send_test_frame.py            # 串口测试帧发送工具
-tools/             # 训练导出 + 单元测试
-  yolov5/                       # 内嵌 YOLOv5 仓库（train/detect/val/export）
-  crane_tests/                  # 模块级单元测试（pytest 驱动，mock hobot_dnn）
-  onnx/                         # 本地 ONNX 导出（已加入 .gitignore）
-  99-crane-cameras.rules        # RDK X5 相机 udev 规则
-  crane-vision.service          # systemd 竞赛模式服务
-requirements.txt   # 运行时/测试依赖
-CHANGELOG.md       # 变更日志
-```
-</details>
+完整目录结构与各模块职责见 [docs/reference/directory_structure.md](docs/reference/directory_structure.md)。
 
 ## 🚀 快速开始
 
@@ -164,7 +112,7 @@ CHANGELOG.md       # 变更日志
 pip install -r requirements.txt
 ```
 
-开发机建议使用独立 conda 环境（如 `D:\conda_envs\crane-clean`，Python 3.11），避免 `opencv-python` 与系统包冲突。若进行 YOLOv5 训练/导出，额外安装 `tools/yolov5/requirements.txt`。 
+开发机建议使用独立 conda 环境（如 `D:\conda_envs\crane-clean`，Python 3.11），避免 `opencv-python` 与系统包冲突。 
 
 ### 运行测试
 
@@ -247,9 +195,8 @@ crane-vision.service` 释放相机和串口。
 | [docs/guides/RDKx5_Bin_Inference.md](docs/guides/RDKx5_Bin_Inference.md) | YOLO11 BPU 板端推理工作流 |
 | [docs/reference/vision_config.md](docs/reference/vision_config.md) | `configs/vision.yaml` 字段与映射规则参考 |
 | [docs/reference/CRANE_VISION_PROTOCOL.md](docs/reference/CRANE_VISION_PROTOCOL.md) | 串口硬件接线与 12 字节协议细节 |
-| [docs/reference/directory_structure.md](docs/reference/directory_structure.md) | 仓库目录结构与各模块职责 |
-| [docs/reference/conventions.md](docs/reference/conventions.md) | 数据集与资产命名规范 |
-| [docs/runbooks/commands.md](docs/runbooks/commands.md) | 完整命令清单（conda 环境、训练/导出、部署） |
+| [docs/reference/directory_structure.md](docs/reference/directory_structure.md) | 仓库目录结构、各模块职责与数据集/资产命名 |
+| [docs/runbooks/commands.md](docs/runbooks/commands.md) | 完整命令清单（conda 环境、运行、部署） |
 | [docs/runbooks/rdk_service.md](docs/runbooks/rdk_service.md) | `crane-vision.service` systemd 服务安装与运维 |
 
 ## 🚧 约束
@@ -262,4 +209,4 @@ crane-vision.service` 释放相机和串口。
 
 ## 📄 许可证
 
-仓库根目录未附带独立 LICENSE 文件，随本项目仓库一起分发；内嵌 `tools/yolov5/` 遵循其自身 GPL 许可证。
+仓库根目录未附带独立 LICENSE 文件，随本项目仓库一起分发。

@@ -18,8 +18,8 @@ data/              # 数据集（YOLO 格式：images/ + labels/ + dataset.yaml�
 docs/              # 部署与运行时文档
                    #   runbooks/
                    #     commands.md             – 完整命令清单
+                   #     rdk_service.md          – crane-vision.service 系统服务运维
                    #   reference/
-                   #     conventions.md          – 数据集与资产命名规范
                    #     CRANE_VISION_PROTOCOL.md – 串口硬件与通信协议
                    #     directory_structure.md  – 本文件（目录布局）
                    #     vision_config.md        – vision.yaml 配置字段参考
@@ -44,6 +44,7 @@ scripts/           # 视觉运行时入口
                    #   main_arm64.py – RDK X5 竞赛模式入口
                    #   main_amd64.py – x86 双相机 PyTorch 推理 + 逻辑补全（CompetitionUI）
                    #   watchdog.sh – main_arm64.py 自动重启脚本
+                   #   install_crane_service.sh – systemd 竞赛模式服务安装
                    #   .gitkeep
 tests/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
                    #   calibrate.py               – 校准 UI 入口
@@ -56,9 +57,29 @@ tests/              # 独立功能测试脚本（x86 / RDK X5 均可运行）
                    #   test_ui_completion.py      – 推断标签渲染测试
 requirements.txt   # 运行时/测试依赖
 README.md          # 项目概览（侧重视觉模块）
-tools/yolov5/      # 内嵌 YOLOv5 仓库（train.py、detect.py、val.py、export.py 等）
-tools/crane_tests/ # 模块级单元测试（pytest 驱动，mock hobot_dnn）
-tools/onnx/        # 本地 ONNX 导出；已加入 .gitignore
+tools/crane_tests/           # 模块级单元测试（pytest 驱动，mock hobot_dnn）
+tools/99-crane-cameras.rules # RDK X5 相机 udev 规则
+tools/crane-vision.service   # systemd 竞赛模式服务
 ```
 
-`data/*` 和 `tools/onnx/*` 已加入 `.gitignore`，仅保留 `data/.gitkeep`。大型资产和数据集只保存在本地工作区，不提交到仓库。
+`data/*` 已加入 `.gitignore`，仅保留 `data/.gitkeep`。大型资产和数据集只保存在本地工作区，不提交到仓库。
+
+## 数据集与资产命名规范
+
+### 数据集目录结构
+
+每个数据集目录应包含：
+
+- `images/train/` 和 `images/val/`
+- `labels/train/` 和 `labels/val/`，文件为 YOLO 格式 `.txt`（`class x_center y_center width height`，已归一化）
+- `dataset.yaml`（或 `<name>.yaml`），包含 `path`、`train`、`val`、`names`、`nc`
+
+现有数据集 YAML 使用 `path: .` 和 `train: .`，因此需要在该 YAML 所在目录下调用。新建数据集配置时，建议使用绝对路径或仓库根目录相对路径，以避免路径歧义。
+
+### 模型资产命名
+
+- `.pt`  – PyTorch 权重（Ultralytics 格式）
+- `.onnx` – x86 验证用 ONNX 导出
+- `.bin`  – RDKx5 部署用 BPU 二进制（由板级 `hb_mapper` 生成）
+
+每个 `.bin` 基名都应配有一个部署配置 YAML（例如 `beans.yaml` / `num.yaml`），包含 `imgsz`、`nc`、`names`、`reg_max`、`strides`。额外字段（如 `task`、`model`、`onnx`）不影响板端推理。

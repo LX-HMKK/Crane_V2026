@@ -70,18 +70,18 @@ RDK X5 与下位机通过 `/dev/ttyS1` 通信，默认配置 **921600 8/N/1**。
 - `configs/vision.yaml` 是运行时唯一事实来源；辅助线位置需点击 **SAVE** 按钮手动保存回该文件。
 - 逻辑补全配置 `logic.confidence_threshold` / `max_inferred_beans` / `max_inferred_digits` 控制推断容忍度。推断区 UI 橙色框，检测区黄色框。
 - 新工作的默认分支是 `main`；`master` 是合并视觉运行时之前的历史分支。
-- 提交新的训练/导出脚本或配置前，先确认应放顶层 `scripts/`/`configs/` 还是 `tools/yolov5/`。
+- 提交新的训练/导出脚本或配置前，先确认应放顶层 `scripts/`/`configs/`。
 - 在 x86 开发机上运行 `pytest tools/crane_tests/` 时，测试模块顶部阻止 `ultralytics`/`torch` 导入防内存暴涨；**不要删除这些 `sys.modules[...] = None` 语句**。
 
 ## 文档索引
 
 按需读取，不要预加载：
 
-- [仓库目录结构](docs/reference/directory_structure.md) — 全仓库布局与各目录职责
+- [仓库目录结构](docs/reference/directory_structure.md) — 全仓库布局、各模块职责与数据集/资产命名
 - [vision.yaml 配置参考](docs/reference/vision_config.md) — 相机/模型/UI 字段、映射规则、结果帧格式
 - [提交规范](docs/reference/commit_guidelines.md) — Angular 中文提交 + PowerShell here-string + 禁止协作者
 - [运行时入口与状态机](docs/guides/vision_runtime.md) — 启动方式、状态机、分区映射规则
 - [串口协议](docs/reference/CRANE_VISION_PROTOCOL.md) — 硬件接线与 12 字节帧
-- [数据集与资产命名规范](docs/reference/conventions.md)
 - [完整命令清单](docs/runbooks/commands.md)
+- [RDK X5 服务运维](docs/runbooks/rdk_service.md) — crane-vision.service 启停/日志/校准
 - [RDKx5 BPU 板端工作流](docs/guides/RDKx5_Bin_Inference.md)

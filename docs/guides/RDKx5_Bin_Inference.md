@@ -1,6 +1,6 @@
 # RDKx5 BPU `.bin` 模型板端调用指南
 
-本文档说明如何把 `hb_mapper` 编译出的 YOLO11 6 头 `.bin` 模型部署到 RDKx5 开发板上推理。`.bin` 的产生过程见仓库根目录 `CLAUDE.md` 的“训练检测器 / 导出 ONNX”以及 `tools/yolov5/` 下的训练导出脚本。
+本文档说明如何把 `hb_mapper` 编译出的 YOLO11 6 头 `.bin` 模型部署到 RDKx5 开发板上推理。`.bin` 由板级 `hb_mapper makertbin` 从 YOLO11 6-head ONNX 编译生成（训练/导出流程在仓库外）。
 
 ## 1. 概述
 
@@ -14,7 +14,7 @@
 
 ### 2.1 运行环境
 
-- **仅限 RDKx5 板端**：脚本依赖 `hobot_dnn`，Windows / 普通 x86 开发机无法运行（见 CLAUDE.md 常见坑 9）
+- **仅限 RDKx5 板端**：脚本依赖 `hobot_dnn`，Windows / 普通 x86 开发机无法运行（见 CLAUDE.md 的“重要注意事项”）
 - Python3 + 依赖：
   ```bash
   pip3 install opencv-python pyyaml numpy pyserial Pillow
@@ -67,21 +67,13 @@ task: detect
 
 ## 4. 命令行调用
 
-校准 UI（默认）：
+### 4.1 校准 UI（默认）
 
 ```bash
 python3 scripts/main_arm64.py
 ```
 
-也可显式指定配置文件：
-
-```bash
-python3 scripts/main_arm64.py --config /path/to/vision.yaml
-```
-
-在 UI 中按 `1` / `2` 切换豆子/数字相机，按 ESC 退出。辅助线位置会自动保存到 `configs/vision.yaml`。
-
-指定配置文件：
+在 UI 中按 `1` / `2` 切换豆子/数字相机，按 ESC 退出。辅助线位置会自动保存到 `configs/vision.yaml`。显式指定配置文件：
 
 ```bash
 python3 scripts/main_arm64.py --config /path/to/vision.yaml
@@ -93,11 +85,11 @@ python3 scripts/main_arm64.py --config /path/to/vision.yaml
 ./scripts/watchdog.sh
 ```
 
-### 4.4 不接串口测试 main
+### 4.2 不接串口测试 main
 
-当前未接 STM32 串口时，仍可用以下方式验证 `main_arm64.py` 在板端能正常加载模型、读取双摄像头并进入主循环。
+未接 STM32 串口时，仍可验证 `main_arm64.py` 在板端能正常加载模型、读取双摄像头并进入主循环。
 
-#### 带 UI 的校准预览（默认即 UI，会打开串口）
+**带 UI 的校准预览**（默认即 UI，会打开串口）：
 
 ```bash
 ssh root@192.168.128.10
@@ -110,7 +102,7 @@ python3 scripts/main_arm64.py
 > 需要 RDK X5 接显示器，或 SSH 带 X11 转发（Windows 先开 X server，再用 `ssh -X root@192.168.128.10`）。
 > 若未接 STM32 串口，可临时注释掉 `configs/vision.yaml` 中的 `serial` 段，或将其 `port` 指向 PTY。
 
-#### 无 UI 竞赛主循环（用 PTY 替代串口）
+**无 UI 竞赛主循环**（用 PTY 替代串口）：
 
 ```bash
 # 1. 创建虚拟串口
@@ -202,6 +194,6 @@ python3 scripts/main_arm64.py --headless --config /tmp/crane_vision.yaml
 ## 9. 相关文档
 
 - `CLAUDE.md` —— 仓库根目录的常用命令与项目结构说明
-- `tools/yolov5/` —— 训练与 ONNX 导出脚本
+- [commands.md](../runbooks/commands.md) —— 常见命令清单（含板端测试入口）
+- [CRANE_VISION_PROTOCOL.md](../reference/CRANE_VISION_PROTOCOL.md) —— 串口硬件与 12 字节协议
 - `scripts/main_arm64.py` —— 本文描述的板端竞赛入口/校准 UI
-- CLAUDE.md 常见坑 9 —— `hobot_dnn` 板端依赖说明

@@ -25,17 +25,7 @@ python3 scripts/main_arm64.py --mock-cameras
 
 ## 配置字段
 
-见 `configs/vision.yaml`，主要包含（完整字段与映射规则参考见 [docs/reference/vision_config.md](../reference/vision_config.md)）：
-
-- `serial`：串口设备、波特率、读超时、掉线重连（`serial.reconnect`）。
-- `protocol`：START 命令超时（默认 **3.0 s**，兼容下位机只发单帧 START 或心跳偶发丢失；可按需调小）、结果帧发送间隔（默认 0.05 s，对应 20 Hz）、两路结果最大时间差。
-- `cameras.bean` / `cameras.digit`：两个 USB 相机的设备号、分辨率、缓冲区大小、掉线重连（`cameras.<name>.reconnect`）。
-- `models.bean` / `models.digit`：`.bin` 模型路径与对应部署配置 YAML（`beans.yaml` / `num.yaml`）。
-- `inference`：`imgsz`、`conf_thres`、`iou_thres`、`pad`、`start_gated`（默认 true，仅在下位机发送 START 时运行推理）。
-- `debug`：`force_inference`（headless 无 UI 时强制推理的现场调试开关）。
-- `scan`：连续扫描帧数、最大重试次数、总超时。
-- `lines`：豆子/数字辅助线位置，会被 UI 自动改写。
-- `mapping.bean_to_digit`：黄豆→1、绿豆→2、白芸豆→3（同时作为结果帧颜色编码）。
+完整字段、映射规则与结果帧格式见 [docs/reference/vision_config.md](../reference/vision_config.md)。关键项：`protocol.start_timeout_sec` 默认 **3.0 s**（START 心跳超时）、`inference.start_gated` 默认 `true`（仅下位机发送 START 时运行推理）。
 
 ## 状态机
 
@@ -46,10 +36,10 @@ python3 scripts/main_arm64.py --mock-cameras
 3. **RUNNING**：收到 START 后进入识别状态。
    - **headless 模式**：按 `scan.frames`（默认 2）连续采集并对两路相机做 BPU 推理，通过 `TaskGenerator.generate_frame_with_completion()` 生成 8 字节结果，写入 `serial.current_frame`。
    - **CompetitionUI 模式**：两路独立采集线程持续覆盖各自模型的最新帧槽，两路独立推理线程并行执行 `model.predict()`；`CompetitionResultController` 按 `protocol.send_interval_sec` 周期组合最新两路检测结果并更新 `serial.current_frame`。
-4. **SENDING**：`SerialThread` 以 `protocol.send_interval_sec` 间隔（默认 0.05 s，即 20 Hz）读取 `current_frame`，在 START 有效期间重复发送 12 字节结果帧 `A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`。
+4. **SENDING**：`SerialThread` 以 `protocol.send_interval_sec` 间隔（默认 0.05 s，即 20 Hz）读取 `current_frame`，在 START 有效期间重复发送 12 字节结果帧（字节格式见 [CRANE_VISION_PROTOCOL.md](../reference/CRANE_VISION_PROTOCOL.md)）。
 5. **SILENT**：若连续 `protocol.start_timeout_sec`（默认 **3.0 s**）未收到新的 START 命令，停止发送，清空缓存结果，回到 WAIT_START 等待。
 
-> **赛前准备阶段视觉保持静默**，只有收到 START 命令后才开始识别并回传结果帧。空闲期间模型不推理但保持加载；`CompetitionUI` 右侧的 **DEBUG** 按钮可无视 START 强制推理并显示到界面（仅调试显示，不改变串口回传门控），`configs/vision.yaml` 的 `inference.start_gated: false` 可整体关闭门控。
+> **赛前准备阶段视觉保持静默**，只有收到 START 命令后才开始识别并回传结果帧。空闲期间模型不推理但保持加载。12 字节帧格式、`CompetitionUI` **DEBUG** 按钮（仅显示不改串口门控）与 `inference.start_gated: false` 关闭方式见 [CRANE_VISION_PROTOCOL.md](../reference/CRANE_VISION_PROTOCOL.md) 与 `CLAUDE.md`。
 
 ## 掉线重连与状态显示
 
@@ -131,18 +121,7 @@ python3 scripts/main_arm64.py --mock-cameras
 
 ## x86 开发与完整流程测试
 
-x86 主机没有 `hobot_dnn`，但 `main_amd64.py` 可以通过 `ultralytics` 加载 `assets/*.pt` 进行真实 PyTorch 推理，验证相机 → 模型 → 任务生成 → 结果打印的完整数据流。`crane-clean` 环境已安装 GPU 版依赖：
-
-```bash
-# 全量单元测试（无需 hobot_dnn / ultralytics）
-conda run --prefix /d/conda_envs/crane-clean python -m pytest tools/crane_tests/ -v
-
-# 交互式预览：按 1/2 切换视图，按 ESC 退出（需要 ultralytics）
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --mock-cameras
-
-# 单次扫描并退出
-conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
-```
+x86 主机没有 `hobot_dnn`，但 `main_amd64.py` 可通过 `ultralytics` 加载 `assets/*.pt` 做真实 PyTorch 推理，验证相机 → 模型 → 任务生成 → 结果打印的完整数据流。相关命令（单元测试、`--mock-cameras`、`--once`）见 [docs/runbooks/commands.md](../runbooks/commands.md)。
 
 在 `--mock-cameras` 且没有 `ultralytics` 的环境下，`main_amd64.py` 会进入 camera-only 模式，扫描后输出 `SCAN FAILED: task generator unavailable`，证明数据链路已打通。
 
@@ -153,9 +132,3 @@ conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once
 3. 确认 `configs/vision.yaml` 已保存。
 4. 使用 `./scripts/watchdog.sh` 启动竞赛模式。
 5. 从下位机循环发送 START 命令 `A5 5A 01`，验证返回 12 字节结果帧。
-
-## 记录
-
-- 实现日期：2026-07-07
-- 协议更新日期：2026-07-11
-- 状态机/模块分层更新日期：2026-08-20

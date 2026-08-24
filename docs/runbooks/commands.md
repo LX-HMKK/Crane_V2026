@@ -3,7 +3,7 @@
 > RDK X5 日常启停、日志、更新和校准操作请见
 > [RDK X5 服务运维](rdk_service.md)。
 
-以下命令均在仓库根目录执行。YOLOv5 训练/验证/导出命令引用 `tools/yolov5/` 中的脚本。
+以下命令均在仓库根目录执行，面向视觉运行时、板端入口脚本与增量同步。
 
 ## 开发/测试虚拟环境
 
@@ -99,28 +99,11 @@ conda run --prefix /d/conda_envs/crane-clean python tests/test_serial_loopback.p
 bash scripts/watchdog.sh
 ```
 
+> 生产 `crane-vision.service`（systemd）运行时不要同时启动 `watchdog.sh`，两者会争夺两路相机与 `/dev/ttyS1`；服务自带 `Restart=on-failure`。
+
 ### RDK X5 上电快速启动
 
-竞赛结果通路使用 systemd 服务，不等待 XFCE 桌面、终端或 Docker 完成启动。它先无界面生成串口结果，并在 XFCE 可用后自动显示竞赛 UI。首次部署或更新服务文件后，在 RDK 上以 root 执行：
-
-```bash
-bash scripts/install_crane_service.sh
-systemctl status crane-vision.service
-```
-
-服务在下次上电时会等待 `/dev/crane_cam_beans`、`/dev/crane_cam_digit`、`/dev/ttyS1` 和 `/dev/bpu` 就绪后，直接运行：
-
-```bash
-python3 scripts/main_arm64.py --headless --ui-when-ready
-```
-
-使用 `journalctl -u crane-vision.service -b` 查看 `cameras opened`、`models loaded`、`first valid result ready` 的启动耗时。需要进行校准或使用触摸 UI 时，先停止服务以释放相机和串口：
-
-```bash
-systemctl stop crane-vision.service
-python3 tests/calibrate.py
-systemctl start crane-vision.service
-```
+使用 systemd 服务，无界面生成串口结果并在 XFCE 就绪后自动显示竞赛 UI。安装/启停/日志/校准前停服务释放资源等运维操作，见 [RDK X5 服务运维](rdk_service.md)。
 
 ### x86 完整流程测试（CompetitionUI + PyTorch，无串口）
 
@@ -146,79 +129,9 @@ Settings 页（`3`）除相机曝光/模型置信度外，还包含 **BEAN INFER
 conda run --prefix /d/conda_envs/crane-clean python scripts/main_amd64.py --once --mock-cameras
 ```
 
-## 安装依赖（YOLOv5 训练）
-
-```bash
-pip install -r tools/yolov5/requirements.txt
-```
-
-## 训练检测器
-
-```bash
-python tools/yolov5/train.py \
-  --data data/output_gray/images/dataset.yaml \
-  --weights yolov5n.pt \
-  --img 640 \
-  --batch 16 \
-  --epochs 100 \
-  --project runs/train \
-  --name exp
-```
-
-豆子数据集使用 `data/beans/beans_split/beans_split.yaml`。权重首次使用时会自动下载。
-
-## 验证模型
-
-```bash
-python tools/yolov5/val.py \
-  --data data/output_gray/images/dataset.yaml \
-  --weights assets/num.pt \
-  --img 640
-```
-
-## 运行推理
-
-```bash
-python tools/yolov5/detect.py \
-  --weights assets/num.pt \
-  --source data/dataset3/images/val/ \
-  --img 640 \
-  --conf-thres 0.25 \
-  --iou-thres 0.45 \
-  --project runs/detect \
-  --name exp
-```
-
-## 导出 ONNX
-
-```bash
-python tools/yolov5/export.py \
-  --weights assets/num.pt \
-  --include onnx \
-  --imgsz 640
-```
-
-## 运行 YOLOv5 测试
-
-```bash
-python -m pytest tools/yolov5/tests/
-```
-
-运行单个测试文件：
-
-```bash
-python -m pytest tools/yolov5/tests/test_invariant_export.py -v
-```
-
 ## RDKx5 板端推理
 
-完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口包括 `scripts/main_arm64.py`（竞赛模式）、`tests/calibrate.py`（校准）、`tests/test_camera_view.py`、`tests/test_inference_ui.py`、`tests/test_serial_loopback.py`（独立测试）；部署时需把 `models/`、`scripts/`、`configs/`、`tests/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*.yaml` 一起拷贝到 RDKx5。使用 `python3 tests/calibrate.py` 进行校准，使用 `python3 scripts/main_arm64.py` 运行竞赛模式，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。关键要点：
-
-- `hobot_dnn` 实际使用 `from hobot_dnn import pyeasy_dnn as dnn`，并回退到旧的 `import hobot_dnn as dnn`；仅在 RDKx5 镜像中可用。
-- 输入：模型元数据报告为 RGB NCHW `uint8` 张量，形状 `1×3×640×640`，但 `tensor_type` 为 `NV12`；运行时内部把 RGB NCHW 转换为 flat NV12 缓冲区（`H×W×1.5` 字节）后再喂给 BPU。归一化（`/255`）已编译进模型。
-- 输出为 6 个 `PyDNNTensor` 对象，代码会自动解包 `.buffer` 得到 numpy 数组：`s_bbox`、`m_bbox`、`l_bbox`、`s_cls`、`m_cls`、`l_cls`。
-- Letterbox 填充使用灰度值 `127`。
-- 后处理流程：DFL 解码 → 还原 xyxy → sigmoid → NMS。
+完整流程见 `docs/guides/RDKx5_Bin_Inference.md`。板端入口包括 `scripts/main_arm64.py`（竞赛模式）、`tests/calibrate.py`（校准）、`tests/test_camera_view.py`、`tests/test_inference_ui.py`、`tests/test_serial_loopback.py`（独立测试）；部署时需把 `models/`、`scripts/`、`configs/`、`tests/`、`tools/99-crane-cameras.rules`、`assets/*.bin` 和 `assets/*.yaml` 一起拷贝到 RDKx5。使用 `python3 tests/calibrate.py` 进行校准，使用 `python3 scripts/main_arm64.py` 运行竞赛模式，使用 `./scripts/watchdog.sh` 以看门狗方式运行竞赛模式。`hobot_dnn` 导入、NV12 缓冲、6 头输出、后处理等板端细节见 [RDKx5 BPU 板端工作流](../guides/RDKx5_Bin_Inference.md)。
 
 ## 增量同步修改到 RDK X5
 
@@ -308,32 +221,4 @@ PY
 
 ### 5. 无串口测试竞赛主循环
 
-可用临时 PTY 替代 `/dev/ttyS1`，验证 `main_arm64.py` 能正常加载模型并进入等待 START 状态：
-
-```bash
-# 1. 在 RDK X5 上先创建虚拟串口
-ssh root@192.168.128.10
-python3 - <<'PY'
-import os, pty, signal, sys, time
-def cleanup(s, f): sys.exit(0)
-signal.signal(signal.SIGTERM, cleanup)
-signal.signal(signal.SIGINT, cleanup)
-master, slave = pty.openpty()
-slave_path = os.ttyname(slave)
-link = '/tmp/crane_ttyS1'
-if os.path.islink(link) or os.path.exists(link):
-    os.remove(link)
-os.symlink(slave_path, link)
-print(f'PTY {link} -> {slave_path}', flush=True)
-os.close(slave)
-while True: time.sleep(1)
-PY
-
-# 2. 再开一个 SSH 窗口运行 main（把 serial.port 指向临时 PTY）
-ssh root@192.168.128.10
-cd /home/sunrise/Crane_WS
-sed 's|port: /dev/ttyS1|port: /tmp/crane_ttyS1|' configs/vision.yaml > /tmp/crane_vision.yaml
-python3 scripts/main_arm64.py --config /tmp/crane_vision.yaml
-```
-
-> 测试完成后记得杀掉 PTY 进程并删除 `/tmp/crane_ttyS1`。
+可用临时 PTY 替代 `/dev/ttyS1` 验证 `main_arm64.py` 加载模型并进入等待 START 状态。完整步骤（建虚拟串口 + `--config` 指向临时端口）见 [RDKx5 BPU 板端工作流](../guides/RDKx5_Bin_Inference.md) 的「无串口测试」小节。
