@@ -3,6 +3,8 @@
 > 2026 物流技术创意赛 RDK X5 视觉识别模块
 >
 > 双 USB 相机 + 两路 YOLO11 BPU 模型 + 串口通信，向下位机发送 12 字节结果帧。
+>
+> **运行环境**：视觉板 RDK X5 **8GB**（板载 BPU）· 双 **USB 相机 720p** · **7 寸触摸屏** · 训练卡 **NVIDIA RTX 4060**（YOLO11s）
 
 [![Python](https://img.shields.io/badge/Python-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![OpenCV](https://img.shields.io/badge/OpenCV-5C3EE8?style=flat-square&logo=opencv&logoColor=white)](https://opencv.org/)
@@ -15,7 +17,7 @@
 
 ## 📋 目录
 
-- [功能](#-功能) · [界面预览](#-界面预览) · [运行流程](#-运行流程) · [目录结构](#-目录结构)
+- [功能](#-功能) · [界面预览](#-界面预览) · [运行流程](#-运行流程) · [数据集与训练](#-数据集与训练) · [目录结构](#-目录结构)
 - [快速开始](#-快速开始) · [配置](#-配置) · [文档](#-文档) · [约束](#-约束) · [许可证](#-许可证)
 
 ---
@@ -27,25 +29,31 @@
 - **逻辑补全**：缺区/重复时通过全局排列评分推断最可能的值，推断区以橙色框显示；超过上限（豆子 ≤1、数字 ≤2）时拒绝发送。
 - **串口输出**：收到下位机 START 帧（`A5 5A 01`）后，发送 12 字节结果帧（`A5 5A C1 C2 C3 N4 N5 N6 N7 N8 0D 0A`）。START 心跳默认保持 **3.0 秒**有效，兼容单帧触发或偶发丢包。
 - **掉线重连**：相机/串口连接中断后自动重连；UI 状态栏显示 BEAN/DIGIT/SERIAL 连接状态，离线相机以占位画面提示。
+- **START 门控推理**：模型推理仅在收到下位机 START 后运行（比赛要求"收到开始指令后才能推理"）；运行期间模型常驻待命，冷推理单帧约 **40 ms**。
+- **DEBUG 门控**：开启后忽略 START 门控、持续推理，用于赛前调试与逻辑验证（仅显示在 UI，不写入串口缓存）。
+- **性能**：双路采集 + 双模型推理 + 结果组合 + 串口发送全链路约 **19 FPS**。
 
 ## 🖼️ 界面预览
 
-竞赛模式 CompetitionUI 截图（x86 静态图片 + PyTorch 推理）：
+以下均为竞赛模式 CompetitionUI 截图（x86 静态图片 + PyTorch 推理，**DEBUG:ON** 状态）：右侧 **DEBUG** 按钮以橙色高亮，表示正在强制推理；控件按 **7 寸触摸屏** 加大尺寸，赛前调参更顺手。
 
 <p align="center">
   <img src="docs/images/ui_bean.jpg" width="80%" alt="豆子取货区检测：检测框 + 取货区辅助线 ①–③"/>
 </p>
-**豆子取货区检测**：豆子相机画面叠加检测框与取货区辅助线 ①–③。
+
+**豆子取货区检测**：豆子相机画面叠加检测框（黄色）与取货区辅助线 ①–③，取货区按辅助线分为三区，每区各识别一粒豆子。
 
 <p align="center">
   <img src="docs/images/ui_digit.jpg" width="80%" alt="数字放置区检测：检测框 + 放置区辅助线 ④–⑧"/>
 </p>
-**数字放置区检测**：数字相机画面叠加检测框与放置区辅助线 ④–⑧。
+
+**数字放置区逻辑补全**：④ 区数字缺失时，按全局排列评分推断为 `1`；推断区以**橙色 INFER 标签**提示，与黄色检测区明显区分。
 
 <p align="center">
-  <img src="docs/images/ui_settings.png" width="80%" alt="校准设置面板：辅助线 / 置信度 / 推断上限滑块"/>
+  <img src="docs/images/ui_settings.png" width="80%" alt="校准设置面板：辅助线 / 置信度 / 推断上限滑块（触摸尺寸）"/>
 </p>
-**校准设置面板**：辅助线、置信度阈值与逻辑补全推断上限滑块，SAVE 写回配置。
+
+**校准设置面板**：辅助线、置信度阈值与逻辑补全推断上限滑块均按触摸屏加大尺寸，拖动即时预览，SAVE 一键写回 `configs/vision.yaml`。
 
 ## 🗺️ 运行流程
 
@@ -96,6 +104,17 @@ flowchart TD
     style OUT fill:#fdedec,stroke:#e74c3c
 ```
 
+## 🧠 数据集与训练
+
+两路检测模型均为 **YOLO11s**，权重已迭代到 **v7**（`assets/beans_v7.*` / `assets/num_v7.*`，仅保留最终版权重）。数据集位于 [`data/`](data/)：
+
+| 模型 | 数据集 | 图片量 | 训练 / 验证 / 测试 |
+| ---- | ------ | ------ | ---- |
+| 豆子 | `data/beans/` | ≈ **3123 张** | 2187 / 624 / 312 |
+| 数字 | `data/digits/` | ≈ **4350 张**（已转灰度） | 3045 / 870 / 435 |
+
+**训练流水线（自动标注 + 人工校验）**：先训练一版作为标注模型 → 用其对新增样本**自动标注**，再逐张**人工校验**修正标签 → 以更准的标签重训下一版 → 如此循环迭代至 **v7**。依靠该闭环，数据量与标注质量逐版提升。
+
 ## 📁 目录结构
 
 **目录一览**：`assets` · `configs` · `data` · `docs` · `models` · `scripts` · `tests` · `tools`
@@ -138,7 +157,7 @@ python scripts/main_amd64.py --mock-cameras
 python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digit-image data/image_for_test/num_2.jpg
 ```
 
-按 `1`=豆子画面，`2`=数字画面，`3`=settings（含推断上限滑块），`SAVE` 保存配置，`EXIT` 退出。
+按键 `1`=豆子画面，`2`=数字画面，`3`=settings（含推断上限滑块），`d`=DEBUG 强制推理，`SAVE` 保存配置，`EXIT` 退出。
 
 ### 校准辅助线
 
@@ -152,7 +171,7 @@ RDK X5 或开发机接真实相机时去掉 `--mock-cameras`，在实时预览�
 
 ### 板端部署
 
-1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置，当前权重版本为 `*_v7.*`，`v7` 是训练权重迭代号，模型仍为 YOLO11）拷贝到 RDK X5。
+1. 将 `models/`、`scripts/`、`configs/`、`tests/` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置，当前权重版本为 `*_v7.*`，`v7` 是训练权重迭代号，模型为 YOLO11s）拷贝到 RDK X5。
 2. 校准辅助线：
    ```bash
    python3 tests/calibrate.py
@@ -206,6 +225,7 @@ crane-vision.service` 释放相机和串口。
 - 串口参数：**921600 8/N/1**（`/dev/ttyS1`，禁止使用 `/dev/ttyS0`）。
 - 开发机不要运行 `main_arm64.py`（依赖 RDK X5 镜像中的 `hobot_dnn`）；x86 使用 `main_amd64.py` 或 `tests/` 下的独立脚本。
 - 分支策略：默认分支 `main`；`master` 为历史分支。
+- 模型推理默认受 `inference.start_gated` 控制：**收到 START 后才推理**，符合"收到开始指令后才能推理"的比赛规则；调试时可用 UI 右侧 **DEBUG** 按钮或 `debug.force_inference` 强制推理（仅显示、不写串口）。
 
 ## 📄 许可证
 
