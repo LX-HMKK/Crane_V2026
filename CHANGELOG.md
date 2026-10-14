@@ -20,6 +20,8 @@
 - README 精简：删除手写目录、装饰性徽章、冗余 Mermaid 配色与重复段落（START 门控 / 串口参数 / 开发机限制），修正许可证章节为 Apache 2.0，板端部署步骤补上 udev 规则；首页导语与运行环境改为加粗导语 + 规格表，强化信息层级。
 - README 运行流程图由 Mermaid 代码块改为已渲染的 `docs/images/pipeline.svg`（矢量，5.8 KB），避免在不支持 Mermaid 的 Markdown 渲染器中退化为源码。
 - README 收敛为板端（RDK X5 / arm64）操作指南：移除 x86 开发机的依赖安装、单元测试与 `main_amd64.py` 流程，改为板端「校准 → 自检 → 启动 → 服务」四步；配置表、界面预览与约束同步去掉 x86 表述。
+- README 移除串口帧格式等接口细节（12 字节结果帧、START 帧报文、波特率），统一指向 `docs/reference/CRANE_VISION_PROTOCOL.md`；功能列表收敛为 5 条核心能力（「串口输出」「START 门控推理」合并为一行「实时输出」），流程图节点同步改为「识别结果帧」。
+- README 新增「框架结构」小节（`models/` 六层职责 + 脚本/资产位置），板端部署删除文件拷贝清单（同步清单见 `docs/runbooks/commands.md`）。
 
 ### 修复
 

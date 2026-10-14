@@ -28,7 +28,7 @@
   <text x="611" y="194.9" font-size="14" fill="#1f2933" text-anchor="middle">逻辑补全：缺区 / 重复推断</text>
   <text x="611" y="226.9" font-size="14" fill="#c0392b" text-anchor="middle">超推断上限 → 拒绝发送</text>
   <rect x="756" y="82" width="176" height="48" rx="11" fill="#fdedec" stroke="#e0807c" stroke-width="1.7"/>
-  <text x="844" y="111.25" font-size="15" fill="#1f2933" text-anchor="middle">12 字节结果帧</text>
+  <text x="844" y="111.25" font-size="15" fill="#1f2933" text-anchor="middle">识别结果帧</text>
   <rect x="756" y="146" width="176" height="48" rx="11" fill="#fdedec" stroke="#e0807c" stroke-width="1.7"/>
   <text x="844" y="175.25" font-size="15" fill="#1f2933" text-anchor="middle">串口线程 20 Hz</text>
   <rect x="756" y="210" width="176" height="48" rx="11" fill="#fdedec" stroke="#e0807c" stroke-width="1.7"/>
@@ -51,7 +51,7 @@
   <polygon points="844,210 840.746,203.243 847.254,203.243" fill="#8b95a5"/>
   <path d="M844 258 L844 292 L650 292 L650 248" fill="none" stroke="#aab3c0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6"/>
   <polygon points="650,248 653.254,254.757 646.746,254.757" fill="#aab3c0"/>
-  <text x="658" y="283.375" font-size="12.5" fill="#6b7785" text-anchor="start">START 帧轮询 · 门控推理</text>
+  <text x="658" y="283.375" font-size="12.5" fill="#6b7785" text-anchor="start">START 指令轮询 · 门控推理</text>
   <path d="M560 248 L560 330" fill="none" stroke="#aab3c0" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="8 6"/>
   <polygon points="560,330 556.746,323.243 563.254,323.243" fill="#aab3c0"/>
   <text x="552" y="283.375" font-size="12.5" fill="#6b7785" text-anchor="end">并行显示</text>
