@@ -18,7 +18,8 @@
 - `protocol.start_timeout_sec` 默认值由 `0.3` 秒调整为 `3.0` 秒，收到单帧 START 后保持 active 更久，兼容下位机只发单帧或心跳偶发丢失的场景；仍可按需调小以恢复严格短超时。
 - README 美化，新增界面预览与运行流程图；CLAUDE.md 低频参考内容下沉到 `docs/runbooks/` 与 `docs/reference/`。
 - README 精简：删除手写目录、装饰性徽章、冗余 Mermaid 配色与重复段落（START 门控 / 串口参数 / 开发机限制），修正许可证章节为 Apache 2.0，板端部署步骤补上 udev 规则；首页导语与运行环境改为加粗导语 + 规格表，强化信息层级。
-- README 运行流程图由 Mermaid 代码块改为已渲染的 `docs/images/pipeline.png`，避免在不支持 Mermaid 的 Markdown 渲染器中退化为源码。
+- README 运行流程图由 Mermaid 代码块改为已渲染的 `docs/images/pipeline.svg`（矢量，5.8 KB），避免在不支持 Mermaid 的 Markdown 渲染器中退化为源码。
+- README 收敛为板端（RDK X5 / arm64）操作指南：移除 x86 开发机的依赖安装、单元测试与 `main_amd64.py` 流程，改为板端「校准 → 自检 → 启动 → 服务」四步；配置表、界面预览与约束同步去掉 x86 表述。
 
 ### 修复
 

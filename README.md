@@ -25,7 +25,7 @@
 
 ## 🖼️ 界面预览
 
-竞赛模式 CompetitionUI 截图（x86 静态图片 + PyTorch 推理，**DEBUG:ON** 强制推理）：控件按 7 寸触摸屏加大尺寸，赛前调参更顺手。
+竞赛模式 CompetitionUI 截图（**DEBUG:ON** 强制推理）：控件按 7 寸触摸屏加大尺寸，赛前调参更顺手。
 
 <p align="center">
   <img src="docs/images/ui_bean.jpg" width="80%" alt="豆子取货区检测：检测框 + 取货区辅助线 ①–③"/>
@@ -48,7 +48,7 @@
 ## 🗺️ 运行流程
 
 <p align="center">
-  <img src="docs/images/pipeline.png" width="100%" alt="运行流程：豆子/数字相机采集 → 两路 YOLO11 BPU 推理 → 结果组合与逻辑补全 → 12 字节结果帧经串口线程发往下位机，UI 并行显示"/>
+  <img src="docs/images/pipeline.svg" width="100%" alt="运行流程：豆子/数字相机采集 → 两路 YOLO11 BPU 推理 → 结果组合与逻辑补全 → 12 字节结果帧经串口线程发往下位机，UI 并行显示"/>
 </p>
 
 两路采集/推理并行执行，在逻辑处理汇合后由串口线程发送；主线程 UI 只做显示，不阻塞采集与推理。
@@ -64,47 +64,23 @@
 
 标注采用**自动标注 + 人工校验**闭环：用当前权重对新增样本自动标注 → 逐张人工修正标签 → 用更准的标签重训下一版，数据量与标注质量逐版提升至 v7。
 
-## 🚀 快速开始
+## 🚀 板端部署（RDK X5）
 
-### 安装依赖
-
-```bash
-pip install -r requirements.txt
-```
-
-开发机建议使用独立 conda 环境（如 `D:\conda_envs\crane-clean`，Python 3.11），避免 `opencv-python` 与系统包冲突。
-
-### 运行测试
+1. 拷贝 `models/`、`scripts/`、`configs/`、`tests/`、`tools/99-crane-cameras.rules` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置，当前权重版本 `*_v7.*`）到板端工作区 `/home/sunrise/Crane_WS`。
+2. 板端常用命令：
 
 ```bash
-# 模块级单元测试（x86，mock hobot_dnn）
-python -m pytest tools/crane_tests/ -v
-
-# 独立功能测试（x86，直接运行）
-python tests/test_logic_completion.py
+python3 tests/calibrate.py                  # 校准辅助线：拖滑块调整，SAVE 写回 configs/vision.yaml
+python3 tests/test_camera_view.py           # 自检双相机画面（不接串口）
+python3 tests/test_inference_ui.py          # 自检 BPU 模型与检测框（不接串口）
+python3 scripts/main_arm64.py               # 启动竞赛模式
+bash scripts/watchdog.sh                    # 现场调试：带看门狗启动，崩溃自动重启
+sudo bash scripts/install_crane_service.sh  # 上电自启：安装 systemd 服务
 ```
 
-### x86 完整流程测试（CompetitionUI + PyTorch）
+3. 下位机发送 START 帧 → 视觉返回 12 字节结果帧。
 
-`main_amd64.py` 启动 CompetitionUI，双相机同时 PyTorch 推理 + 逻辑补全，无串口依赖：
-
-```bash
-# 合成帧
-python scripts/main_amd64.py --mock-cameras
-# 静态测试图片
-python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digit-image data/image_for_test/num_2.jpg
-```
-
-按键 `1`=豆子 · `2`=数字 · `3`=settings · `d`=DEBUG 强制推理 · `SAVE` 保存配置 · `EXIT` 退出。
-
-### 板端部署（RDK X5）
-
-1. 拷贝 `models/`、`scripts/`、`configs/`、`tests/`、`tools/99-crane-cameras.rules` 与 `assets/*.bin`、`assets/*.yaml`（BPU 部署配置，当前权重版本 `*_v7.*`）到板端工作区。
-2. 校准辅助线：`python3 tests/calibrate.py`（x86 无相机时用 `--mock-cameras` 预览）。
-3. 启动竞赛模式：`bash scripts/watchdog.sh`（崩溃自动重启）。
-4. 下位机发送 START 帧 → 视觉返回 12 字节结果帧。
-
-上电即用的无界面服务：`sudo bash scripts/install_crane_service.sh`。服务以 `main_arm64.py --headless --ui-when-ready` 先启动结果通路，XFCE 就绪后接管同一 UI；校准前先 `sudo systemctl stop crane-vision.service` 释放相机和串口。
+systemd 服务以 `main_arm64.py --headless --ui-when-ready` 先启动结果通路，XFCE 就绪后接管同一 UI；校准前先 `sudo systemctl stop crane-vision.service` 释放相机和串口。`watchdog.sh` 与 systemd 服务不要同时启动（会争抢相机与 `/dev/ttyS1`）。启停、日志与故障排查见 [RDK X5 服务运维](docs/runbooks/rdk_service.md)。
 
 ## 🔧 配置
 
@@ -114,8 +90,8 @@ python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digi
 | ---- | ------ |
 | `serial` | 串口设备、波特率（默认 **921600** 8/N/1）、掉线重连参数 |
 | `cameras.bean` / `cameras.digit` | 设备节点、分辨率、帧率、曝光、灰度、掉线重连参数 |
-| `models.bean` / `models.digit` | BPU `.bin`/`.cfg`（arm64）或 `.pt`（x86）权重，可选覆盖 `conf_thres`/`iou_thres` |
-| `inference` | 输入尺寸 / pad、门控开关 `start_gated` |
+| `models.bean` / `models.digit` | BPU `.bin` 权重与 `.cfg` 部署配置，可选覆盖 `conf_thres`/`iou_thres` |
+| `inference` | 输入尺寸 640×640、letterbox pad 127、门控开关 `start_gated` |
 | `lines.bean` / `lines.digit` | 竖直辅助线，划分取货区 ①–③ 和放置区 ④–⑧ |
 | `mapping.bean_to_digit` | 豆子类别 → 协议颜色编码（黄豆→1、绿豆→2、白芸豆→3） |
 | `logic` | 置信度阈值 `confidence_threshold`，推断上限 `max_inferred_beans`/`max_inferred_digits` |
@@ -130,12 +106,12 @@ python scripts/main_amd64.py --bean-image data/image_for_test/beans_2.jpg --digi
 | [docs/reference/vision_config.md](docs/reference/vision_config.md) | `configs/vision.yaml` 字段与映射规则参考 |
 | [docs/reference/CRANE_VISION_PROTOCOL.md](docs/reference/CRANE_VISION_PROTOCOL.md) | 串口硬件接线与 12 字节协议细节 |
 | [docs/reference/directory_structure.md](docs/reference/directory_structure.md) | 仓库目录结构、各模块职责与数据集/资产命名 |
-| [docs/runbooks/commands.md](docs/runbooks/commands.md) | 完整命令清单（conda 环境、运行、部署、增量同步） |
+| [docs/runbooks/commands.md](docs/runbooks/commands.md) | 板端运行、部署与增量同步命令清单 |
 | [docs/runbooks/rdk_service.md](docs/runbooks/rdk_service.md) | `crane-vision.service` systemd 服务安装与运维 |
 
 ## 🚧 约束
 
-- `hobot_dnn` 仅在 RDK X5 上可用；开发机不要运行 `main_arm64.py`，改用 `main_amd64.py` 或 `tests/` 下的独立脚本，单元测试通过 mock 覆盖。
+- 推理依赖 RDK X5 板载 `hobot_dnn`（BPU），运行时须在板端执行。
 - 串口固定 **921600 8/N/1**、`/dev/ttyS1`；**禁止使用 `/dev/ttyS0`**（系统调试串口）。
 - `configs/vision.yaml` 是运行时唯一事实来源，辅助线位置需点击 **SAVE** 手动写回。
 - 默认分支 `main`；`master` 是合并视觉运行时之前的历史分支。
